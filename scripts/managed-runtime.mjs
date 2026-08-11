@@ -1,4 +1,3 @@
-import { execFile } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import {
   mkdirSync,
@@ -7,7 +6,13 @@ import {
   rmdirSync,
   writeFileSync
 } from 'node:fs'
+import { platform } from 'node:os'
 import { fileURLToPath } from 'node:url'
+import {
+  isProcessExecuting,
+  readProcessIdentity,
+  stableProcessIdentityMatches
+} from './process-identity.mjs'
 
 const runtimeDirectory = fileURLToPath(new URL('../.agora-runtime/', import.meta.url))
 const runtimeStatePath = fileURLToPath(new URL('../.agora-runtime/get-going.json', import.meta.url))
@@ -18,7 +23,6 @@ export const validateRuntimeIdentity = (value) => {
   if (
     typeof value !== 'object'
     || value === null
-    || value.version !== 1
     || !Number.isSafeInteger(value.pid)
     || value.pid <= 1
     || typeof value.marker !== 'string'
@@ -27,10 +31,191 @@ export const validateRuntimeIdentity = (value) => {
     throw new Error('Agora managed-runtime state is malformed; refusing to signal any process.')
   }
 
+  if (value.version === 1) {
+    return {
+      marker: value.marker,
+      pid: value.pid,
+      version: value.version
+    }
+  }
+
+  if (
+    value.version === 2
+    && value.platform === 'linux'
+    && typeof value.bootId === 'string'
+    && /^[a-f0-9-]{16,64}$/.test(value.bootId)
+    && typeof value.startTimeTicks === 'string'
+    && /^\d+$/.test(value.startTimeTicks)
+  ) {
+    return {
+      bootId: value.bootId,
+      marker: value.marker,
+      pid: value.pid,
+      platform: value.platform,
+      startTimeTicks: value.startTimeTicks,
+      version: value.version
+    }
+  }
+
+  if (
+    value.version === 2
+    && value.platform === 'darwin'
+    && typeof value.startTime === 'string'
+    && /^\S{3}\s+\S{3}\s+\d+\s+\d{2}:\d{2}:\d{2}\s+\d{4}$/.test(value.startTime)
+  ) {
+    return {
+      marker: value.marker,
+      pid: value.pid,
+      platform: value.platform,
+      startTime: value.startTime,
+      version: value.version
+    }
+  }
+
+  throw new Error('Agora managed-runtime state is malformed; refusing to signal any process.')
+}
+
+const runtimeIdentityFromSnapshot = (marker, snapshot) => {
+  if (!isProcessExecuting(snapshot) || snapshot.title !== marker) {
+    throw new Error('Could not capture Agora managed-runtime process identity.')
+  }
+
+  if (snapshot.platform === 'linux') {
+    return validateRuntimeIdentity({
+      bootId: snapshot.bootId,
+      marker,
+      pid: snapshot.pid,
+      platform: snapshot.platform,
+      startTimeTicks: snapshot.startTimeTicks,
+      version: 2
+    })
+  }
+
+  if (snapshot.platform === 'darwin') {
+    return validateRuntimeIdentity({
+      marker,
+      pid: snapshot.pid,
+      platform: snapshot.platform,
+      startTime: snapshot.startTime,
+      version: 2
+    })
+  }
+
+  throw new Error('Agora local process management supports Linux and macOS only.')
+}
+
+const createCurrentRuntimeIdentity = async () => {
+  const marker = `agora:${randomBytes(8).toString('hex')}`
+  process.title = marker
+  return runtimeIdentityFromSnapshot(marker, await readProcessIdentity(process.pid))
+}
+
+const persistRuntimeIdentity = (identity) => {
+  mkdirSync(runtimeDirectory, { mode: 0o700, recursive: true })
+  writeFileSync(runtimeStatePath, `${JSON.stringify(identity)}\n`, {
+    flag: 'wx',
+    mode: 0o600
+  })
+}
+
+const runtimeIdentityMatches = (left, right) => {
+  if (
+    !left
+    || left.version !== right.version
+    || left.pid !== right.pid
+    || left.marker !== right.marker
+  ) {
+    return false
+  }
+
+  if (right.version === 1) {
+    return true
+  }
+
+  return right.platform === 'linux'
+    ? left.platform === right.platform
+      && left.bootId === right.bootId
+      && left.startTimeTicks === right.startTimeTicks
+    : left.platform === right.platform && left.startTime === right.startTime
+}
+
+export const inspectRuntimeProcess = async (
+  identity,
+  readIdentity = readProcessIdentity
+) => {
+  const current = await readIdentity(identity.pid)
+
+  if (!isProcessExecuting(current)) {
+    return 'stopped'
+  }
+
+  if (current.title !== identity.marker) {
+    return 'unowned'
+  }
+
+  if (identity.version === 1) {
+    return 'legacy-owned'
+  }
+
+  return stableProcessIdentityMatches(identity, current) ? 'owned' : 'unowned'
+}
+
+export const clearRuntimeIdentity = (identity) => {
+  const current = readRuntimeIdentity()
+
+  if (current && runtimeIdentityMatches(current, identity)) {
+    rmSync(runtimeStatePath, { force: true })
+
+    try {
+      rmdirSync(runtimeDirectory)
+    } catch (error) {
+      if (error?.code !== 'ENOENT' && error?.code !== 'ENOTEMPTY') {
+        throw error
+      }
+    }
+  }
+}
+
+export const claimRuntimeIdentity = async (overrides = {}) => {
+  if (platform() !== 'linux' && platform() !== 'darwin') {
+    throw new Error('Agora local process management supports Linux and macOS only.')
+  }
+
+  const readIdentity = overrides.readIdentity ?? readRuntimeIdentity
+  const inspectProcess = overrides.inspectProcess ?? inspectRuntimeProcess
+  const clearIdentity = overrides.clearIdentity ?? clearRuntimeIdentity
+  const createIdentity = overrides.createIdentity ?? createCurrentRuntimeIdentity
+  const writeIdentity = overrides.writeIdentity ?? persistRuntimeIdentity
+  const existing = readIdentity()
+
+  if (existing) {
+    const status = await inspectProcess(existing)
+
+    if (status === 'owned') {
+      throw new Error('Cannot start Agora: another Agora get-going process is active.')
+    }
+
+    if (status === 'legacy-owned') {
+      throw new Error('Cannot start Agora: a live legacy runtime cannot be signaled safely. Stop that get-going process, then run npm run all-done.')
+    }
+
+    clearIdentity(existing)
+  }
+
+  const identity = await createIdentity()
+
+  try {
+    writeIdentity(identity)
+  } catch (error) {
+    if (error?.code === 'EEXIST') {
+      throw new Error('Cannot start Agora: another get-going process claimed the runtime state.')
+    }
+
+    throw error
+  }
+
   return {
-    marker: value.marker,
-    pid: value.pid,
-    version: value.version
+    ...identity
   }
 }
 
@@ -58,100 +243,28 @@ export const readRuntimeIdentity = () => {
   }
 }
 
-const readProcessTitle = (pid) => new Promise((resolve, reject) => {
-  execFile('ps', ['-p', String(pid), '-o', 'command='], {
-    encoding: 'utf8',
-    windowsHide: true
-  }, (error, stdout) => {
-    if (!error) {
-      resolve(stdout.trim() || undefined)
-      return
-    }
-
-    if (error.code === 1 && !stdout.trim()) {
-      resolve(undefined)
-      return
-    }
-
-    reject(new Error('Could not validate Agora managed-runtime process identity.'))
-  })
-})
-
-export const inspectRuntimeProcess = async (identity, readTitle = readProcessTitle) => {
-  const title = await readTitle(identity.pid)
-
-  if (title === undefined) {
-    return 'stopped'
-  }
-
-  return title === identity.marker ? 'owned' : 'unowned'
-}
-
-const runtimeIdentityMatches = (left, right) => (
-  left?.version === right.version
-  && left?.pid === right.pid
-  && left?.marker === right.marker
-)
-
-export const clearRuntimeIdentity = (identity) => {
-  const current = readRuntimeIdentity()
-
-  if (current && runtimeIdentityMatches(current, identity)) {
-    rmSync(runtimeStatePath, { force: true })
-
-    try {
-      rmdirSync(runtimeDirectory)
-    } catch (error) {
-      if (error?.code !== 'ENOENT' && error?.code !== 'ENOTEMPTY') {
-        throw error
-      }
-    }
-  }
-}
-
-export const claimRuntimeIdentity = async () => {
-  const existing = readRuntimeIdentity()
-
-  if (existing) {
-    const status = await inspectRuntimeProcess(existing)
-    const detail = status === 'owned'
-      ? 'another Agora get-going process is active'
-      : 'stale or unowned runtime state needs reconciliation'
-
-    throw new Error(`Cannot start Agora: ${detail}. Run npm run all-done and inspect the reported state.`)
-  }
-
-  const identity = {
-    marker: `agora:${randomBytes(8).toString('hex')}`,
-    pid: process.pid,
-    version: 1
-  }
-
-  process.title = identity.marker
-  mkdirSync(runtimeDirectory, { mode: 0o700, recursive: true })
-  writeFileSync(runtimeStatePath, `${JSON.stringify(identity)}\n`, {
-    flag: 'wx',
-    mode: 0o600
-  })
-
-  return identity
-}
-
 export const stopManagedRuntime = async (identity, overrides = {}) => {
   const inspectProcess = overrides.inspectProcess ?? inspectRuntimeProcess
   const sendSignal = overrides.sendSignal ?? ((pid, signal) => process.kill(pid, signal))
+  const clearIdentity = overrides.clearIdentity ?? clearRuntimeIdentity
   const wait = overrides.sleep ?? sleep
   const maxChecks = overrides.maxChecks ?? 60
+  const killChecks = overrides.killChecks ?? 20
   const checkIntervalMs = overrides.checkIntervalMs ?? 250
   const initialStatus = await inspectProcess(identity)
 
   if (initialStatus === 'stopped') {
-    clearRuntimeIdentity(identity)
+    clearIdentity(identity)
     return 'already-stopped'
   }
 
-  if (initialStatus !== 'owned') {
-    throw new Error('Agora managed-runtime state does not own its recorded process; refusing to signal it.')
+  if (initialStatus === 'unowned') {
+    clearIdentity(identity)
+    return 'stale-record-cleared'
+  }
+
+  if (initialStatus === 'legacy-owned') {
+    throw new Error('Agora legacy runtime state describes a live process but lacks stable identity; refusing to signal it.')
   }
 
   const immediateStatus = await inspectProcess(identity)
@@ -172,7 +285,29 @@ export const stopManagedRuntime = async (identity, overrides = {}) => {
     await wait(checkIntervalMs)
 
     if (await inspectProcess(identity) !== 'owned') {
-      clearRuntimeIdentity(identity)
+      clearIdentity(identity)
+      return 'stopped'
+    }
+  }
+
+  if (await inspectProcess(identity) !== 'owned') {
+    clearIdentity(identity)
+    return 'stopped'
+  }
+
+  try {
+    sendSignal(identity.pid, 'SIGKILL')
+  } catch (error) {
+    if (error?.code !== 'ESRCH' || await inspectProcess(identity) === 'owned') {
+      throw new Error('Could not force-stop the owned Agora managed-runtime process.')
+    }
+  }
+
+  for (let check = 0; check < killChecks; check += 1) {
+    await wait(checkIntervalMs)
+
+    if (await inspectProcess(identity) !== 'owned') {
+      clearIdentity(identity)
       return 'stopped'
     }
   }

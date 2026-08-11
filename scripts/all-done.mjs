@@ -94,6 +94,10 @@ const stopManagedDevRuntime = async () => {
   if (result === 'already-stopped') {
     console.log('OK  Recorded Agora dev runtime was already stopped')
   }
+
+  if (result === 'stale-record-cleared') {
+    console.log('OK  Removed stale Agora runtime state without signaling its unowned process')
+  }
 }
 
 const disableSupabaseContainerRestarts = async () => {
