@@ -47,6 +47,13 @@ describe('Agora request parameter validation', () => {
     expect(isAgoraRequestParams(agoraRequestIdentifiers.listGroups, {
       limit: 101
     })).toBe(false)
+    expect(isAgoraRequestParams(agoraRequestIdentifiers.listPendingInvitations, {
+      limit: 101
+    })).toBe(false)
+    expect(isAgoraRequestParams(agoraRequestIdentifiers.listGroupMembers, {
+      groupId: firstId,
+      limit: 101
+    })).toBe(false)
     expect(isAgoraRequestParams(agoraRequestIdentifiers.createGroup, {
       name: 'x'.repeat(121)
     })).toBe(false)

@@ -6,7 +6,7 @@ The app supports backend-configurable public human signup, Supabase email/passwo
 OTP, magic-link and passkey capabilities, and a protected home screen that says
 `Welcome to Agora`.
 
-It keeps the product surface intentionally small for now: auth, server-created human principals, runtime config, Netlify builds, a local Supabase stack, Edge Function readiness routes, and local/LAN developer ergonomics. Group membership, chat persistence, and chat handlers belong to later delivery slices.
+It keeps the product surface intentionally small for now: auth, server-created human principals, owner-managed groups, in-app human invitations, active human/agent memberships, runtime config, Netlify builds, a local Supabase stack, Edge Function readiness routes, and local/LAN developer ergonomics. Message persistence and message/read-state/Realtime handlers belong to later delivery slices.
 
 ## Get Going
 
@@ -68,7 +68,7 @@ Deployment and hosted environment setup lives in `README.ENV.md`. Keep that file
 
 ## Security Integration Tests
 
-The security integration command verifies the anonymous database-backed health contract, public signup and server-controlled human-principal provisioning, direct-table RLS/grants, duplicate and forged-row denial, principal-kind constraints, memberless cross-user isolation, and the dual-auth dispatcher boundary:
+The security integration command verifies the anonymous database-backed health contract, public signup and server-controlled human-principal provisioning, direct-table RLS/grants, duplicate and forged-row denial, principal-kind constraints, invitation and active-membership transitions, bounded keyset pagination, removed/pending isolation, and the dual-auth dispatcher boundary:
 
 ```sh
 npm run get-going
