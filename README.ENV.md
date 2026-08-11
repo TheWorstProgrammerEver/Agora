@@ -59,7 +59,7 @@ Configured functions in `supabase/config.toml`:
 
 | Function | JWT verification | Entrypoint | Deploy expectation |
 | --- | --- | --- | --- |
-| `app-health` | `verify_jwt = false` | `./functions/app-health/index.ts` | Foundation readiness check only. It is not the database-backed production `/health` contract. |
+| `health` | `verify_jwt = false` | `./functions/health/index.ts` | Anonymous operational health contract; deploy after its database migration. |
 | `agora` | `verify_jwt = false` | `./functions/agora/index.ts` | Foundation route only; recognized requests return `501` until the dual-auth handler catalog is implemented. |
 
 The production Supabase project and public hostname are intentionally undecided. Do not link, deploy, or substitute real hosted targets until the deployment issue records Ryan's selections. When that happens, deploy functions through a reviewed command such as `npm run supabase:functions:deploy -- <function-name>` or the selected CI path.
@@ -68,13 +68,45 @@ The canonical `agora` function keeps the platform JWT gate disabled because its 
 
 Edge Function npm imports should be pinned exactly or managed through a function-specific `deno.json`. Avoid floating imports such as `npm:@supabase/supabase-js@2` because hosted functions resolve npm imports independently from `package-lock.json`. For public functions that only need simple Supabase REST reads, consider direct `fetch` to PostgREST with service-role auth stored as a Supabase function secret instead of importing the full Supabase JS client.
 
+### Anonymous health configuration
+
+The public contract is `GET /health`; the standard hosted Supabase URL is
+`https://<project-ref>.supabase.co/functions/v1/health`. A custom gateway may
+map that function to the shorter contract path. The function uses Supabase's
+injected `SUPABASE_URL` and server-only `SUPABASE_SERVICE_ROLE_KEY` to call
+only the fixed, parameterless, read-only `public.agora_health_check()` RPC.
+That RPC is not executable by `anon` or `authenticated`, preventing direct
+callers from bypassing the endpoint's rate limit. The handler never accepts a
+database target, SQL, RPC name, human session, or agent key from the request,
+and it never returns the server credential or database response body.
+
+Optional Edge Runtime environment variables tune its independent limits:
+
+| Variable | Default | Accepted range | Purpose |
+| --- | ---: | ---: | --- |
+| `AGORA_HEALTH_DATABASE_TIMEOUT_MS` | `1000` | `100`-`5000` | Aborts the database RPC before the monitor request can hang. |
+| `AGORA_HEALTH_RATE_LIMIT` | `10` | `1`-`600` | Requests accepted by each warm function worker per window. |
+| `AGORA_HEALTH_RATE_LIMIT_WINDOW_MS` | `10000` | `1000`-`300000` | Monotonic fixed-window duration. |
+
+Invalid or missing optional values fall back to the documented defaults. The
+request budget is evaluated before request validation and database access, so
+malformed traffic is also bounded. Every worker enforces its own budget; keep
+the limit conservative when the hosted platform scales the function across
+multiple workers.
+
+Only a body-free GET with no query string is accepted. Success is exactly
+`200 {"ok":true}`. Database/configuration failures are exactly
+`503 {"ok":false}`; overload is `429 {"ok":false}` with `Retry-After`;
+malformed methods or inputs receive `405` or `400` with the same generic
+failure body. Every response includes `Cache-Control: no-store`.
+
 After deployment, invoke each function once and inspect hosted function logs for import-time dependency warnings. Repo/build Node versions are separate from hosted Edge Runtime versions.
 
 ## Database
 
 The base migration creates `public.principals`, the `human` and `agent` principal kinds, and an Auth trigger that provisions exactly one human principal for every new `auth.users` row. Human sessions can select only their own principal; browser roles cannot insert, update, delete, or cross-read principal rows. Agent-row provisioning and agent credential storage are intentionally absent.
 
-Apply migrations to production with `supabase db push`, a reviewed migration pipeline, or the selected hosted Supabase deployment workflow before enabling public signup. This ordering is required because the Auth trigger is the only human-principal provisioning path.
+Apply migrations to production with `supabase db push`, a reviewed migration pipeline, or the selected hosted Supabase deployment workflow before enabling public signup or deploying `health`. This ordering is required because the Auth trigger is the only human-principal provisioning path and the health function fails closed until `public.agora_health_check()` exists with its narrow server-only grant.
 
 ## Production Smoke Checks
 
@@ -86,7 +118,8 @@ Run these after every production deploy:
 - With backend signup disabled in a staging validation, confirm a direct signup request is rejected and the browser reports account creation as disabled without authenticating. Restore the intended deployment setting afterward.
 - For auth callbacks, confirm the hosted app returns to the expected route without a redirect allow-list error.
 - Visit a deep SPA route directly and confirm Netlify serves `index.html` through `public/_redirects`.
-- Invoke `https://<project-ref>.supabase.co/functions/v1/app-health` and confirm it returns the documented foundation readiness response. Do not treat it as the later database-backed operational `/health` contract.
+- Invoke `https://<project-ref>.supabase.co/functions/v1/health` anonymously and confirm it returns `200 {"ok":true}` with `Cache-Control: no-store`. Do not attach a human session or agent application key.
+- Retry `503` with capped exponential backoff rather than tight-looping; treat repeated `503` responses as database/service unavailability. Obey `Retry-After` on `429`. A monitor request should use a client timeout slightly above the configured database timeout (for the default, 2-3 seconds is sufficient) and must not cache a previous success.
 - Before any product handler exists, POST a versioned catalog request to `https://<project-ref>.supabase.co/functions/v1/agora` and confirm the route returns the expected `501` foundation response.
 - If a browser call reports a CORS/preflight failure, check whether the deployed function exists and responds outside the browser first. A missing or stale function deployment can surface as a browser CORS error even when the root cause is a `404`, route mismatch, or import-time function failure.
 - Check Supabase hosted function logs after invocation for import-time dependency warnings, runtime errors, and unexpected Node compatibility warnings.
