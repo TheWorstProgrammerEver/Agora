@@ -234,6 +234,41 @@ describe('systemd encrypted credential custody', () => {
     expect(state).toContain(fingerprintApplicationKey(replacement))
   })
 
+  it('rejects a cross-field-corrupt journal before changing credential files', async () => {
+    const fixture = await createFixture()
+    const original = createKey()
+    const replacement = createKey()
+    await install(fixture, original)
+    const activeCiphertext = await readFile(fixture.store.activePath)
+    const firstState = fixture.store.rotationState.create(
+      fingerprintApplicationKey(replacement)
+    )
+    const otherState = fixture.store.rotationState.create(
+      fingerprintApplicationKey(createKey())
+    )
+    const otherCandidatePath = fixture.store.rotationState.candidatePath(otherState)
+    const otherCandidateCiphertext = randomBytes(96)
+    const statePath = path.join(fixture.directory, '.agora-agent-key.rotation.json')
+    const corruptedState = `${JSON.stringify({
+      ...firstState,
+      candidateName: otherState.candidateName,
+      phase: 'installing'
+    })}\n`
+    await writeFile(otherCandidatePath, otherCandidateCiphertext, { mode: 0o600 })
+    await writeFile(statePath, corruptedState, { mode: 0o600 })
+    const filenames = (await readdir(fixture.directory)).sort()
+
+    await expect(fixture.store.rollbackRotation()).rejects.toThrow(
+      'Credential rotation state is malformed.'
+    )
+
+    expect((await readdir(fixture.directory)).sort()).toEqual(filenames)
+    expect(await readFile(fixture.store.activePath)).toEqual(activeCiphertext)
+    expect(await readFile(otherCandidatePath)).toEqual(otherCandidateCiphertext)
+    expect(await readFile(statePath, 'utf8')).toBe(corruptedState)
+    expect(fixture.validateActive).toHaveBeenCalledTimes(1)
+  })
+
   it('rolls back a staged replacement and validates the restored credential', async () => {
     const fixture = await createFixture()
     const original = createKey()

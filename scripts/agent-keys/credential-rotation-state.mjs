@@ -10,6 +10,10 @@ const candidateNamePattern = /^\.agora-agent-key\.[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a
 const operationIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 const phases = new Set(['preparing', 'installing', 'staged', 'rolling-back', 'committing'])
 
+const candidateNameFor = (operationId) => (
+  `.agora-agent-key.${operationId}.candidate.cred`
+)
+
 const pathExists = async (target) => {
   try {
     await lstat(target)
@@ -56,6 +60,7 @@ const parseState = (serialized) => {
     || !operationIdPattern.test(state.operationId)
     || !phases.has(state.phase)
     || !candidateNamePattern.test(state.candidateName)
+    || state.candidateName !== candidateNameFor(state.operationId)
   ) {
     throw new Error('Credential rotation state is malformed.')
   }
@@ -79,7 +84,7 @@ export class CredentialRotationState {
     const operationId = randomUUID()
 
     return Object.freeze({
-      candidateName: `.agora-agent-key.${operationId}.candidate.cred`,
+      candidateName: candidateNameFor(operationId),
       fingerprint: validateFingerprint(fingerprint),
       operationId,
       phase: 'preparing',
