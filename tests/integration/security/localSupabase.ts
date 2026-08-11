@@ -74,6 +74,20 @@ export const createAnonymousClient = () => createClient(
   clientOptions
 )
 
+export const createAgentClient = (applicationKey: string, accessToken?: string) => createClient(
+  config.url,
+  config.publishableKey,
+  {
+    ...clientOptions,
+    global: {
+      headers: {
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+        'x-agora-agent-key': applicationKey
+      }
+    }
+  }
+)
+
 export const createAdminClient = () => createClient(
   config.url,
   config.serviceRoleKey,

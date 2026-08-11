@@ -64,7 +64,7 @@ describe('human principal security', () => {
     expect(crossResult.data).toEqual([])
   })
 
-  it('denies anonymous, forged, update, and delete access', async () => {
+  it('returns no principal to anonymous callers and denies direct mutations', async () => {
     const forgedId = randomUUID()
     transientPrincipalIds.push(forgedId)
     const anonymousResult = await createAnonymousClient().from('principals').select('id')
@@ -83,7 +83,8 @@ describe('human principal security', () => {
       .delete()
       .eq('id', first.principalId)
 
-    expect(anonymousResult.error).not.toBeNull()
+    expect(anonymousResult.error).toBeNull()
+    expect(anonymousResult.data).toEqual([])
     expect(forgedResult.error).not.toBeNull()
     expect(updateResult.error).not.toBeNull()
     expect(deleteResult.error).not.toBeNull()
