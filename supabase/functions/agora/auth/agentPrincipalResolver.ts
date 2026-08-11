@@ -2,22 +2,23 @@ import {
   agentApplicationKeyHeader,
   isAgentApplicationKey
 } from '../../../../common/agentApplicationKey.ts'
+import { AgoraAuthenticationError } from './authenticationError.ts'
+import {
+  createPrincipalDatabase,
+  type AuthorizedPrincipalContext,
+  type PrincipalContext
+} from './principalContext.ts'
 
 type AgentResolverClient = {
-  rpc(name: 'current_agent_principal_id'): PromiseLike<{
+  rpc(name: string, params?: Record<string, unknown>): PromiseLike<{
     data: unknown
     error: unknown
   }>
 }
 
-export type AgentPrincipalContext = {
-  kind: 'agent'
-  principalId: string
-}
+export type AgentPrincipalContext = PrincipalContext & { kind: 'agent' }
 
-export class AgentAuthenticationError extends Error {
-  readonly status = 401
-
+export class AgentAuthenticationError extends AgoraAuthenticationError {
   constructor() {
     super('A valid Agora agent key is required.')
   }
@@ -26,20 +27,29 @@ export class AgentAuthenticationError extends Error {
 export const resolveAgentPrincipal = async (
   request: Request,
   createClient: (applicationKey: string) => AgentResolverClient
-): Promise<AgentPrincipalContext> => {
+): Promise<AgentPrincipalContext> => (
+  await authenticateAgentPrincipal(request, createClient)
+).principal as AgentPrincipalContext
+
+export const authenticateAgentPrincipal = async (
+  request: Request,
+  createClient: (applicationKey: string) => AgentResolverClient
+): Promise<AuthorizedPrincipalContext> => {
   const applicationKey = request.headers.get(agentApplicationKeyHeader)
 
   if (!isAgentApplicationKey(applicationKey)) {
     throw new AgentAuthenticationError()
   }
 
-  const { data, error } = await createClient(applicationKey).rpc(
-    'current_agent_principal_id'
-  )
+  const client = createClient(applicationKey)
+  const { data, error } = await client.rpc('current_agent_principal_id')
 
   if (error || typeof data !== 'string') {
     throw new AgentAuthenticationError()
   }
 
-  return { kind: 'agent', principalId: data }
+  return {
+    database: createPrincipalDatabase(client),
+    principal: { kind: 'agent', principalId: data }
+  }
 }

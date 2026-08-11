@@ -47,7 +47,7 @@ afterAll(async () => {
 })
 
 describe.sequential('anonymous health endpoint', () => {
-  it('does not grant anonymous callers a direct database capability', async () => {
+  it('limits anonymous database grants to the RLS-protected principal resolver surface', async () => {
     const functions = await database.query<{
       allowed: boolean
       function_name: string
@@ -82,13 +82,21 @@ describe.sequential('anonymous health endpoint', () => {
       order by table_name, privilege_type
     `)
 
-    expect(functions.rows.filter(({ allowed }) => allowed)).toEqual([])
+    expect(functions.rows.filter(({ allowed }) => allowed)).toEqual([
+      { allowed: true, function_name: 'current_agent_principal_id' },
+      { allowed: true, function_name: 'current_principal_id' },
+      { allowed: true, function_name: 'current_principal_is_group_member' }
+    ])
     expect(healthGrants.rows).toEqual([{
       anonymous: false,
       authenticated: false,
       service: true
     }])
-    expect(tables.rows).toEqual([])
+    expect(tables.rows).toEqual([
+      { privilege_type: 'SELECT', table_name: 'groups' },
+      { privilege_type: 'SELECT', table_name: 'memberships' },
+      { privilege_type: 'SELECT', table_name: 'principals' }
+    ])
   })
 
   it('executes the fixed database check for an anonymous caller before returning a safe response', async () => {

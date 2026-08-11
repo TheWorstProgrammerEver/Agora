@@ -388,8 +388,8 @@ entrypoint = "./functions/health/index.ts"
 
 [functions.agora]
 enabled = true
-# The canonical route will validate human sessions and opaque agent credentials itself.
-# Until that boundary lands, its empty handler registry returns 501 for every valid request.
+# The canonical route validates human sessions and opaque agent credentials itself.
+# The platform gate must remain disabled because Agora agent keys are not JWTs.
 verify_jwt = false
 entrypoint = "./functions/agora/index.ts"
 
