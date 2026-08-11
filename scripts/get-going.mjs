@@ -199,7 +199,7 @@ export const isFunctionRouteReady = (functionName, result) => {
     return false
   }
 
-  if (functionName === 'app-health') {
+  if (functionName === 'health') {
     return result.status >= 200 && result.status < 300
   }
 
@@ -238,7 +238,7 @@ const edgeFunctionFailureMessage = (error, statuses) => [
   error.message,
   'Configured Edge Function routes:',
   ...statuses.map((status) => `- ${formatFunctionRouteStatus(status)}`),
-  'If app-health is ready but a business route is HTTP 404, or a business route is HTTP 503 after adding shared imports, stop and restart the local Supabase stack so Edge Runtime reloads this branch.',
+  'If health is ready but a business route is HTTP 404, or a business route is HTTP 503 after adding shared imports, stop and restart the local Supabase stack so Edge Runtime reloads this branch.',
   'If Edge Runtime is healthy but Kong reports name-resolution failures, restart the local Kong container for this Supabase project and rerun get-going.'
 ].join('\n')
 
