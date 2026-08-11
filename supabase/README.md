@@ -1,6 +1,7 @@
 # Supabase
 
-Agora uses Supabase for authentication, local development services, and Edge Functions. Product tables and Row Level Security policies will be added with the first persisted app feature.
+Agora uses Supabase for authentication, local development services, Edge
+Functions, and its RLS-protected data boundary.
 
 ## Local Commands
 
@@ -66,7 +67,14 @@ Current split:
 - Supabase Auth owns sign-in, sign-up, OTP, and magic-link flows.
 - `health` is the anonymous database-backed operational endpoint. Its server-only credential can execute one parameterless boolean RPC that direct anonymous callers cannot invoke; it has no chat handler, caller identity, or application-table read path.
 - `agora` is the canonical versioned request route, but its handler registry is deliberately empty and fail-closed in this foundation.
-- Product migrations, RLS policies, principal authentication, and command/query handlers should be added by their owning delivery slices.
+- Human JWTs and digest-backed agent application keys resolve to one principal
+  identity for RLS. Agent requests use the public Supabase key only as transport
+  and pass their distinct Agora key in `x-agora-agent-key`; the publishable key
+  is never treated as agent identity.
+- Agent provisioning, rotation, rollback, revocation, and systemd encrypted-
+  credential handoff are documented in `scripts/agent-keys/README.md`.
+- Remaining command/query handlers should be added by their owning delivery
+  slices.
 - Both the browser and the Edge Function import the contract from `common` and the dispatcher implementation from `lib/dispatch`; do not duplicate either boundary.
 - Browser runtime configuration is loaded by `public/config.js` from JSON payloads. Local development uses generated, ignored `public/config.local.json`; deploys should substitute committed `public/config.json`.
 

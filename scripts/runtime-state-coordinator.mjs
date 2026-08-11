@@ -54,7 +54,10 @@ export const acquireRuntimeStateCoordinator = async (key, overrides = {}) => {
     }
 
     if (performance.now() >= deadline) {
-      throw new Error('Agora runtime state is busy; retry the lifecycle command.')
+      throw new Error(
+        overrides.busyMessage
+          ?? 'Agora runtime state is busy; retry the lifecycle command.'
+      )
     }
 
     await wait(pollIntervalMs)

@@ -281,15 +281,15 @@ describe('group-domain security', () => {
     ])).resolves.toEqual([[], [], []])
   })
 
-  it('denies anonymous table and helper access', async () => {
+  it('returns no RLS rows to keyless callers and denies human-only table and helper access', async () => {
     const source = requireFixture()
     const anonymous = createAnonymousClient()
-    const tableResults = await Promise.all([
+    const [groups, memberships, invitations] = await Promise.all([
       anonymous.from('groups').select('id'),
       anonymous.from('memberships').select('id'),
       anonymous.from('invitations').select('id')
     ])
-    const helperResults = await Promise.all([
+    const [emailHelper, memberHelper, ownerHelper] = await Promise.all([
       anonymous.rpc('current_auth_email'),
       anonymous.rpc('current_principal_is_group_member', {
         group_id_to_check: source.groups.visible
@@ -299,9 +299,16 @@ describe('group-domain security', () => {
       })
     ])
 
-    for (const result of [...tableResults, ...helperResults]) {
-      expect(result.error).not.toBeNull()
-    }
+    expect(groups.error).toBeNull()
+    expect(groups.data).toEqual([])
+    expect(memberships.error).toBeNull()
+    expect(memberships.data).toEqual([])
+    expect(invitations.error).not.toBeNull()
+
+    expect(emailHelper.error).not.toBeNull()
+    expect(memberHelper.error).toBeNull()
+    expect(memberHelper.data).toBe(false)
+    expect(ownerHelper.error).not.toBeNull()
   })
 
   it('denies direct group-domain mutations to authenticated callers', async () => {

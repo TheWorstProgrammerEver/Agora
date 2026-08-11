@@ -1,4 +1,10 @@
 import { withSupabase } from 'npm:@supabase/server@1.3.0'
+import { agentApplicationKeyHeader } from '../../../common/agentApplicationKey.ts'
+import { createAgentRlsClient } from './auth/agentRlsClient.ts'
+import {
+  AgentAuthenticationError,
+  resolveAgentPrincipal
+} from './auth/agentPrincipalResolver.ts'
 import { createAgoraDispatcher } from './dispatcher.ts'
 import { AgoraRequestParseError, parseAgoraRequest } from './request.ts'
 
@@ -14,6 +20,10 @@ export default {
     }
 
     try {
+      if (request.headers.has(agentApplicationKeyHeader)) {
+        await resolveAgentPrincipal(request, createAgentRlsClient)
+      }
+
       const dispatcher = createAgoraDispatcher()
       const agoraRequest = await parseAgoraRequest(request)
 
@@ -22,6 +32,10 @@ export default {
       return unavailableResponse()
     } catch (error) {
       if (error instanceof AgoraRequestParseError) {
+        return Response.json({ error: error.message }, { status: error.status })
+      }
+
+      if (error instanceof AgentAuthenticationError) {
         return Response.json({ error: error.message }, { status: error.status })
       }
 
