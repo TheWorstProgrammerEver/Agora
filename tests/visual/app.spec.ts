@@ -25,8 +25,8 @@ test.beforeEach(async ({ page }) => {
 
 test.afterEach(async () => {
   const emails = [...createdUserEmails]
-  createdUserEmails.clear()
   await deleteSupabaseUsersByEmail(emails)
+  emails.forEach((email) => createdUserEmails.delete(email))
 })
 
 test('renders configured authentication methods', async ({ page }) => {
