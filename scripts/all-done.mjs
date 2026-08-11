@@ -1,11 +1,17 @@
 import { spawn } from 'node:child_process'
 import { readFileSync } from 'node:fs'
+import { pathToFileURL } from 'node:url'
+import {
+  readRuntimeIdentity,
+  stopManagedRuntime
+} from './managed-runtime.mjs'
 
 const appPort = 5173
 const supabasePort = 54321
 const studioPort = 54323
 const mailPort = 54324
 const supabaseConfigPath = 'supabase/config.toml'
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 const run = (command, args, options = {}) => new Promise((resolve, reject) => {
   const child = spawn(command, args, {
@@ -63,29 +69,6 @@ const httpOk = async (url) => {
   }
 }
 
-const pidsListeningOnPort = async (port) => {
-  const result = await tryRun('lsof', ['-ti', `tcp:${port}`], { capture: true })
-
-  if (!result.ok) {
-    return []
-  }
-
-  return [...new Set(result.stdout
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean))]
-}
-
-const killPids = async (label, pids) => {
-  if (pids.length === 0) {
-    console.log(`OK  ${label} already stopped`)
-    return
-  }
-
-  console.log(`Stopping ${label} (${pids.join(', ')})...`)
-  await tryRun('kill', pids)
-}
-
 const getSupabaseProjectId = () => {
   const config = readFileSync(supabaseConfigPath, 'utf8')
   const match = config.match(/^project_id\s*=\s*"([^"]+)"\s*$/m)
@@ -97,17 +80,20 @@ const getSupabaseProjectId = () => {
   return match[1]
 }
 
-const stopProcessMatches = async (label, pattern) => {
-  const result = await tryRun('pgrep', ['-f', pattern], { capture: true })
-  const currentPid = String(process.pid)
-  const pids = result.ok
-    ? result.stdout
-      .split('\n')
-      .map((line) => line.trim())
-      .filter((pid) => pid && pid !== currentPid)
-    : []
+const stopManagedDevRuntime = async () => {
+  const identity = readRuntimeIdentity()
 
-  await killPids(label, [...new Set(pids)])
+  if (!identity) {
+    console.log('OK  Agora-managed dev processes have no active runtime record')
+    return
+  }
+
+  console.log(`Stopping Agora-managed dev runtime (${identity.pid})...`)
+  const result = await stopManagedRuntime(identity)
+
+  if (result === 'already-stopped') {
+    console.log('OK  Recorded Agora dev runtime was already stopped')
+  }
 }
 
 const disableSupabaseContainerRestarts = async () => {
@@ -133,7 +119,11 @@ const disableSupabaseContainerRestarts = async () => {
   }
 
   console.log('Disabling Docker auto-restart for local Supabase containers...')
-  await tryRun('docker', ['update', '--restart=no', ...containerIds])
+  const update = await tryRun('docker', ['update', '--restart=no', ...containerIds])
+
+  if (!update.ok) {
+    throw new Error('Could not disable restart for Agora local Supabase containers.')
+  }
 }
 
 const stopSupabase = async () => {
@@ -148,36 +138,61 @@ const stopSupabase = async () => {
   throw new Error('Supabase did not stop cleanly.')
 }
 
-const printEndpointStatus = async () => {
-  const checks = [
-    ['App', `http://127.0.0.1:${appPort}/`],
-    ['Supabase API', `http://127.0.0.1:${supabasePort}/auth/v1/settings`],
-    ['Studio', `http://127.0.0.1:${studioPort}`],
-    ['Mailpit', `http://127.0.0.1:${mailPort}`]
-  ]
+const endpointChecks = [
+  ['App', `http://127.0.0.1:${appPort}/`],
+  ['Supabase API', `http://127.0.0.1:${supabasePort}/auth/v1/settings`],
+  ['Studio', `http://127.0.0.1:${studioPort}`],
+  ['Mailpit', `http://127.0.0.1:${mailPort}`]
+]
 
+const getEndpointStatuses = () => Promise.all(endpointChecks.map(async ([label, url]) => ({
+  label,
+  running: await httpOk(url),
+  url
+})))
+
+const waitForEndpointsOff = async () => {
+  for (let check = 0; check < 20; check += 1) {
+    const statuses = await getEndpointStatuses()
+
+    if (statuses.every(({ running }) => !running)) {
+      return statuses
+    }
+
+    await sleep(250)
+  }
+
+  return getEndpointStatuses()
+}
+
+const printEndpointStatus = (statuses) => {
   console.log('\nLocal endpoint status')
   console.log('--------------------------------')
 
-  for (const [label, url] of checks) {
-    const running = await httpOk(url)
-    const status = running ? 'RUN' : 'OFF'
-
-    console.log(`${status} ${label.padEnd(14)} ${url}`)
+  for (const { label, running, url } of statuses) {
+    console.log(`${running ? 'RUN' : 'OFF'} ${label.padEnd(14)} ${url}`)
   }
 }
 
-const main = async () => {
-  await killPids('Agora dev server', await pidsListeningOnPort(appPort))
-  await stopProcessMatches('Supabase Edge Functions', 'supabase functions serve')
+export const main = async () => {
+  await stopManagedDevRuntime()
   await disableSupabaseContainerRestarts()
   await stopSupabase()
-  await printEndpointStatus()
+
+  const statuses = await waitForEndpointsOff()
+  printEndpointStatus(statuses)
+  const running = statuses.filter((status) => status.running)
+
+  if (running.length > 0) {
+    throw new Error(`Local shutdown is incomplete; still responding: ${running.map(({ label }) => label).join(', ')}.`)
+  }
 
   console.log('\nAll done.')
 }
 
-main().catch((error) => {
-  console.error(error.message)
-  process.exit(1)
-})
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((error) => {
+    console.error(error.message)
+    process.exitCode = 1
+  })
+}

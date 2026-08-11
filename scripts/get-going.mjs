@@ -2,6 +2,14 @@ import { spawn } from 'node:child_process'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { networkInterfaces, platform } from 'node:os'
 import { pathToFileURL } from 'node:url'
+import {
+  claimRuntimeIdentity,
+  clearRuntimeIdentity
+} from './managed-runtime.mjs'
+import {
+  startManagedProcess,
+  stopManagedProcesses
+} from './managed-processes.mjs'
 
 const appPort = 5173
 const supabasePort = 54321
@@ -10,6 +18,11 @@ const studioPort = 54323
 const mailPort = 54324
 const supabaseConfigPath = 'supabase/config.toml'
 const managedProcesses = []
+let requestedExitCode
+let resolveShutdown
+const shutdownRequested = new Promise((resolve) => {
+  resolveShutdown = resolve
+})
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -283,22 +296,6 @@ const startSupabase = async () => {
   await waitFor('Supabase API', () => httpOk(`http://127.0.0.1:${supabasePort}/auth/v1/settings`))
 }
 
-const startManagedProcess = (label, command, args) => {
-  console.log(`Starting ${label}...`)
-  const child = spawn(command, args, {
-    stdio: 'inherit',
-    shell: false
-  })
-
-  child.on('exit', (code) => {
-    if (code !== null && code !== 0) {
-      console.error(`${label} exited with code ${code}`)
-    }
-  })
-
-  managedProcesses.push(child)
-}
-
 const ensureEdgeFunctions = async () => {
   const functionNames = getEnabledFunctionNames()
 
@@ -313,7 +310,7 @@ const ensureEdgeFunctions = async () => {
   }
 
   if (shouldStartEdgeFunctions(initialStatuses)) {
-    startManagedProcess('Supabase Edge Functions', 'npm', ['run', 'supabase:functions:serve'])
+    startManagedProcess(managedProcesses, 'Supabase Edge Functions', 'npm', ['run', 'supabase:functions:serve'])
   }
 
   try {
@@ -332,7 +329,7 @@ const ensureVite = async () => {
     return
   }
 
-  startManagedProcess('Agora dev server', 'npm', ['run', 'dev', '--', '--host', '0.0.0.0'])
+  startManagedProcess(managedProcesses, 'Agora dev server', 'npm', ['run', 'dev', '--', '--host', '0.0.0.0'])
   await waitFor('Agora dev server', () => httpOk(appUrl))
 }
 
@@ -416,44 +413,56 @@ const printEndpoints = async (lanAddress) => {
   console.log('\nGenerated local-only config: public/config.local.json')
 }
 
-const stopManagedProcesses = () => {
-  for (const child of managedProcesses) {
-    child.kill('SIGINT')
+const requestShutdown = (exitCode) => {
+  if (requestedExitCode !== undefined) {
+    return
   }
+
+  requestedExitCode = exitCode
+  resolveShutdown()
 }
 
-process.on('SIGINT', () => {
-  stopManagedProcesses()
-  process.exit(130)
-})
-
-process.on('SIGTERM', () => {
-  stopManagedProcesses()
-  process.exit(143)
-})
+process.on('SIGINT', () => requestShutdown(130))
+process.on('SIGTERM', () => requestShutdown(143))
 
 const main = async () => {
-  const lanAddress = getLanAddress()
+  const runtimeIdentity = await claimRuntimeIdentity()
 
-  await ensureDependencies()
-  writeLocalConfig(lanAddress)
-  await ensureDocker()
-  await startSupabase()
-  await disableSupabaseContainerRestarts()
-  await ensureEdgeFunctions()
-  await ensureVite()
-  await printEndpoints(lanAddress)
+  try {
+    const lanAddress = getLanAddress()
 
-  if (managedProcesses.length > 0) {
-    console.log('\nPress Ctrl+C to stop the dev processes started by this script.')
-    await new Promise(() => {})
+    await ensureDependencies()
+    writeLocalConfig(lanAddress)
+    if (requestedExitCode !== undefined) return
+    await ensureDocker()
+    if (requestedExitCode !== undefined) return
+    await startSupabase()
+    if (requestedExitCode !== undefined) return
+    await disableSupabaseContainerRestarts()
+    if (requestedExitCode !== undefined) return
+    await ensureEdgeFunctions()
+    if (requestedExitCode !== undefined) return
+    await ensureVite()
+    if (requestedExitCode !== undefined) return
+    await printEndpoints(lanAddress)
+
+    if (managedProcesses.length > 0) {
+      console.log('\nPress Ctrl+C to stop the dev processes started by this script.')
+      await shutdownRequested
+    }
+  } finally {
+    await stopManagedProcesses(managedProcesses)
+    clearRuntimeIdentity(runtimeIdentity)
   }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((error) => {
-    stopManagedProcesses()
     console.error(error.message)
-    process.exit(1)
+    process.exitCode = 1
+  }).finally(() => {
+    if (process.exitCode !== 1 && requestedExitCode !== undefined) {
+      process.exitCode = requestedExitCode
+    }
   })
 }
