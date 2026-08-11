@@ -1,0 +1,37 @@
+.content {
+  display: inline-flex;
+  position: relative;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+}
+
+.icon {
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+
+  svg {
+    width: var(--control-icon-size);
+    height: var(--control-icon-size);
+    stroke-width: 2.2;
+  }
+}
+
+.label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.accessibleLabel {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}

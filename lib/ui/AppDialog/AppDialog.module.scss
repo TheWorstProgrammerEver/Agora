@@ -1,0 +1,70 @@
+@use "../styles/breakpoints";
+
+.dialog {
+  width: min(calc(100vw - 2rem), 42rem);
+  max-height: min(48rem, calc(100svh - 2rem));
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 0;
+  background: transparent;
+  color: var(--color-text);
+}
+
+.dialog::backdrop {
+  background: rgb(0 0 0 / 52%);
+}
+
+.panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  max-height: inherit;
+  background: var(--color-surface);
+}
+
+.header,
+.footer {
+  padding: clamp(1rem, 3vw, 1.35rem);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  border-bottom: 1px solid var(--color-border);
+
+  h2 {
+    margin: 0;
+    font-size: clamp(1.35rem, 4vw, 1.8rem);
+    line-height: 1;
+  }
+}
+
+.content {
+  display: grid;
+  gap: 1rem;
+  overflow: auto;
+  padding: clamp(1rem, 3vw, 1.35rem);
+}
+
+.footer {
+  border-top: 1px solid var(--color-border);
+}
+
+.footerActions {
+  display: flex;
+  flex-direction: row-reverse;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  justify-content: flex-start;
+}
+
+@media (max-width: breakpoints.$narrow) {
+  .footerActions {
+    flex-direction: column-reverse;
+
+    > * {
+      width: 100%;
+    }
+  }
+}

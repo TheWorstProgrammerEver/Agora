@@ -1,0 +1,47 @@
+{
+  "name": "agora",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "vite",
+    "get-going": "node scripts/get-going.mjs",
+    "all-done": "node scripts/all-done.mjs",
+    "build": "tsc -b && vite build",
+    "build:netlify": "node scripts/build-netlify.mjs",
+    "preview": "vite preview",
+    "lint": "tsc -b",
+    "test": "vitest run",
+    "test:security": "vitest run --config vitest.security.config.ts",
+    "test:visual": "playwright test",
+    "supabase:start": "supabase start",
+    "supabase:stop": "supabase stop",
+    "supabase:status": "supabase status",
+    "supabase:reset": "supabase db reset",
+    "supabase:migration": "supabase db diff --local --file",
+    "supabase:functions:serve": "supabase functions serve",
+    "supabase:functions:deploy": "supabase functions deploy"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "2.110.0",
+    "@vitejs/plugin-react": "6.0.3",
+    "lucide-react": "1.23.0",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
+    "react-router-dom": "7.18.2",
+    "sass": "1.101.0",
+    "typescript": "6.0.3",
+    "vite": "8.1.3"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.61.1",
+    "@types/node": "22.20.0",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "supabase": "2.105.0",
+    "vitest": "4.1.9"
+  }
+}

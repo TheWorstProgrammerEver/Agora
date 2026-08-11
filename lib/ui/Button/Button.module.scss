@@ -1,0 +1,76 @@
+.control {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  min-height: var(--control-min-height);
+  border: 1px solid transparent;
+  border-radius: var(--control-border-radius);
+  padding: var(--control-padding-block) var(--control-padding-inline);
+  cursor: pointer;
+  font-weight: 750;
+  line-height: 1.1;
+  text-decoration: none;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease;
+
+  > svg {
+    flex: 0 0 auto;
+    width: var(--control-icon-size);
+    height: var(--control-icon-size);
+    stroke-width: 2.2;
+  }
+}
+
+.primary {
+  border-color: var(--color-action-primary-border);
+  background: var(--color-action-primary);
+  color: var(--color-action-primary-text);
+}
+
+.primary:hover {
+  background: var(--color-action-primary-hover);
+}
+
+.secondary {
+  border-color: var(--color-border);
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+}
+
+.secondary:hover {
+  border-color: var(--color-action-secondary-hover-border);
+  background: var(--color-action-secondary-hover);
+}
+
+.tertiary {
+  border-color: transparent;
+  background: transparent;
+  color: var(--color-accent-strong);
+}
+
+.tertiary:hover {
+  background: var(--color-action-tertiary-hover);
+}
+
+.destructive {
+  border-color: var(--color-action-destructive-border);
+  background: var(--color-action-destructive);
+  color: var(--color-negative);
+}
+
+.destructive:hover {
+  border-color: var(--color-negative);
+  background: var(--color-action-destructive-hover);
+}
+
+.control:disabled,
+.control[aria-disabled="true"] {
+  border-color: var(--color-border);
+  background: var(--color-surface-raised);
+  color: var(--color-muted);
+  cursor: not-allowed;
+  opacity: 0.7;
+}

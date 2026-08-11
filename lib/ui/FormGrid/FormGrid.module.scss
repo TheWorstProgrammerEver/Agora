@@ -1,0 +1,16 @@
+.form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(14rem, 100%), 1fr));
+  gap: 0.8rem;
+
+  label {
+    display: grid;
+    gap: 0.3rem;
+    font-size: 0.85rem;
+    font-weight: 700;
+  }
+}
+
+.singleColumn {
+  grid-template-columns: 1fr;
+}
