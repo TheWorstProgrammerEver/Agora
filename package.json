@@ -8,6 +8,7 @@
   },
   "scripts": {
     "dev": "vite",
+    "preflight": "node scripts/preflight.mjs",
     "get-going": "node scripts/get-going.mjs",
     "all-done": "node scripts/all-done.mjs",
     "build": "tsc -b && vite build",

@@ -12,17 +12,22 @@ It keeps the product surface intentionally small for now: auth, runtime config, 
 Prerequisites:
 
 - Node.js 22.12.0 or newer, with npm
-- Docker Engine or Docker Desktop
+- Docker Engine with a running daemon on Linux, or Docker Desktop on macOS
+- Playwright Chromium plus its platform runtime libraries
 
 The committed Vite/Vitest/Supabase toolchain is pinned in `package.json` and `package-lock.json`. Refresh direct dependency versions and the Node engine floor together when deliberately updating the starter toolchain.
 
 From a fresh clone:
 
 ```sh
+npm install
+npm run preflight
 npm run get-going
 ```
 
-The script installs npm dependencies when needed, opens and waits for Docker Desktop on macOS, starts the local Supabase stack, starts local Edge Functions, validates each enabled function route from `supabase/config.toml`, starts Vite on LAN, writes ignored local developer config to `public/config.local.json`, verifies reachable ports, and prints the localhost and LAN endpoint sheet.
+The read-only preflight checks Docker daemon access and launches headless Playwright Chromium once. On Linux, `npx playwright install --with-deps chromium` installs the browser and OS libraries; `npx playwright install chromium` installs only the browser bundle.
+
+`get-going` installs npm dependencies when needed, opens and waits for Docker Desktop on macOS, starts the local Supabase stack, starts local Edge Functions, validates each enabled function route from `supabase/config.toml`, starts Vite on LAN, writes ignored local developer config to `public/config.local.json`, verifies reachable ports, and prints the localhost and LAN endpoint sheet.
 
 Press `Ctrl+C` to stop dev processes started by the script. Supabase containers keep their local data in Docker volumes; use `npm run all-done` when you want everything wound down.
 
@@ -63,6 +68,7 @@ Add RLS and direct publishable-key tests here when the first persisted Agora fea
 npm run lint
 npm test
 npm run build
+npm run preflight
 npm run get-going
 npm run test:security
 npm run test:visual
