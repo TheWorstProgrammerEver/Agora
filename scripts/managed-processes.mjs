@@ -1,68 +1,95 @@
 import { spawn } from 'node:child_process'
 import { platform } from 'node:os'
+import {
+  processGroupMembersMatch,
+  readProcessGroupMembers
+} from './process-identity.mjs'
 
-const waitForChildExit = (child, timeoutMs) => new Promise((resolve) => {
-  if (child.exitCode !== null || child.signalCode !== null) {
-    resolve(true)
-    return
-  }
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
-  const onExit = () => {
-    clearTimeout(timeout)
-    resolve(true)
-  }
-  const timeout = setTimeout(() => {
-    child.off('exit', onExit)
-    resolve(false)
-  }, timeoutMs)
+const signalManagedProcessGroup = (
+  processGroupId,
+  signal,
+  expectedMembers
+) => {
+  if (expectedMembers) {
+    const currentMembers = readProcessGroupMembers(processGroupId)
 
-  child.once('exit', onExit)
-})
-
-const signalManagedProcess = (child, signal) => {
-  if (child.exitCode !== null || child.signalCode !== null) {
-    return
-  }
-
-  if (platform() !== 'win32' && child.pid) {
-    try {
-      process.kill(-child.pid, signal)
-      return
-    } catch (error) {
-      if (error?.code !== 'ESRCH') {
-        throw error
-      }
+    if (!processGroupMembersMatch(expectedMembers, currentMembers)) {
+      throw new Error('Agora process-group identity changed before signaling.')
     }
   }
 
-  if (!child.kill(signal) && child.exitCode === null && child.signalCode === null) {
-    throw new Error('Process signal was not accepted.')
+  try {
+    process.kill(-processGroupId, signal)
+  } catch (error) {
+    if (error?.code !== 'ESRCH' || readProcessGroupMembers(processGroupId).length > 0) {
+      throw error
+    }
   }
 }
 
-const terminateManagedProcess = async ({ child, label }) => {
-  if (child.exitCode !== null || child.signalCode !== null) {
+const waitForProcessGroupExit = async (processGroupId, timeoutMs, pollIntervalMs) => {
+  const deadline = performance.now() + timeoutMs
+
+  while (performance.now() < deadline) {
+    if (readProcessGroupMembers(processGroupId).length === 0) {
+      return true
+    }
+
+    await sleep(pollIntervalMs)
+  }
+
+  return readProcessGroupMembers(processGroupId).length === 0
+}
+
+const terminateManagedProcess = async ({ child, label }, options) => {
+  const processGroupId = child.pid
+
+  if (!processGroupId) {
+    if (child.exitCode === null && child.signalCode === null && !child.kill('SIGTERM')) {
+      throw new Error(`${label} did not accept its shutdown signal.`)
+    }
+
+    return
+  }
+
+  const ownedMembers = readProcessGroupMembers(processGroupId)
+
+  if (ownedMembers.length === 0) {
     return
   }
 
   console.log(`Stopping ${label}...`)
-  signalManagedProcess(child, 'SIGTERM')
+  signalManagedProcessGroup(processGroupId, 'SIGTERM')
 
-  if (await waitForChildExit(child, 5000)) {
+  if (await waitForProcessGroupExit(
+    processGroupId,
+    options.graceMs,
+    options.pollIntervalMs
+  )) {
     return
   }
 
-  signalManagedProcess(child, 'SIGKILL')
+  signalManagedProcessGroup(processGroupId, 'SIGKILL', ownedMembers)
 
-  if (!await waitForChildExit(child, 5000)) {
+  if (!await waitForProcessGroupExit(
+    processGroupId,
+    options.killWaitMs,
+    options.pollIntervalMs
+  )) {
     throw new Error(`${label} did not terminate within the shutdown deadline.`)
   }
 }
 
 export const startManagedProcess = (processes, label, command, args) => {
+  if (platform() !== 'linux' && platform() !== 'darwin') {
+    throw new Error('Agora local process management supports Linux and macOS only.')
+  }
+
   console.log(`Starting ${label}...`)
   const child = spawn(command, args, {
-    detached: platform() !== 'win32',
+    detached: true,
     stdio: 'inherit',
     shell: false
   })
@@ -76,9 +103,16 @@ export const startManagedProcess = (processes, label, command, args) => {
   processes.push({ child, label })
 }
 
-export const stopManagedProcesses = async (managedProcesses) => {
+export const stopManagedProcesses = async (managedProcesses, overrides = {}) => {
+  const options = {
+    graceMs: overrides.graceMs ?? 5000,
+    killWaitMs: overrides.killWaitMs ?? 5000,
+    pollIntervalMs: overrides.pollIntervalMs ?? 50
+  }
   const processes = managedProcesses.splice(0)
-  const results = await Promise.allSettled(processes.map(terminateManagedProcess))
+  const results = await Promise.allSettled(processes.map((managedProcess) => (
+    terminateManagedProcess(managedProcess, options)
+  )))
   const failures = results.filter((result) => result.status === 'rejected')
 
   if (failures.length > 0) {
