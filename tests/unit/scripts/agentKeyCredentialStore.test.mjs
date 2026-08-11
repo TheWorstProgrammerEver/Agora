@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, rename, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { randomBytes } from 'node:crypto'
@@ -96,6 +96,7 @@ describe('systemd encrypted credential custody', () => {
 
     expect((await readdir(fixture.directory)).sort()).toEqual([
       '.agora-agent-key.rollback.cred',
+      '.agora-agent-key.rotation.json',
       'agora-agent-key.cred'
     ])
 
@@ -118,6 +119,119 @@ describe('systemd encrypted credential custody', () => {
 
     expect(await readdir(fixture.directory)).toEqual(['agora-agent-key.cred'])
     expect(fixture.validateActive).toHaveBeenCalledTimes(3)
+  })
+
+  it('recovers the original after interruption around the old-credential rename', async () => {
+    const fixture = await createFixture()
+    const original = createKey()
+    const replacement = createKey()
+    await install(fixture, original)
+    const activePath = path.join(fixture.directory, 'agora-agent-key.cred')
+    const rollbackPath = path.join(fixture.directory, '.agora-agent-key.rollback.cred')
+    const originalCiphertext = await readFile(activePath)
+    const state = fixture.store.rotationState.create(
+      fingerprintApplicationKey(replacement)
+    )
+    const candidatePath = fixture.store.rotationState.candidatePath(state)
+    await fixture.store.rotationState.write(state, 'installing')
+    await writeFile(candidatePath, randomBytes(96), { mode: 0o600 })
+    await rename(activePath, rollbackPath)
+
+    await fixture.store.rollbackRotation()
+
+    expect(await readFile(activePath)).toEqual(originalCiphertext)
+    expect(await readdir(fixture.directory)).toEqual(['agora-agent-key.cred'])
+  })
+
+  it('recovers the original after interruption around replacement publication', async () => {
+    const fixture = await createFixture()
+    const original = createKey()
+    const replacement = createKey()
+    await install(fixture, original)
+    const activePath = path.join(fixture.directory, 'agora-agent-key.cred')
+    const rollbackPath = path.join(fixture.directory, '.agora-agent-key.rollback.cred')
+    const originalCiphertext = await readFile(activePath)
+    const state = fixture.store.rotationState.create(
+      fingerprintApplicationKey(replacement)
+    )
+    const candidatePath = fixture.store.rotationState.candidatePath(state)
+    const replacementCiphertext = randomBytes(96)
+    await fixture.store.rotationState.write(state, 'installing')
+    await writeFile(candidatePath, replacementCiphertext, { mode: 0o600 })
+    await rename(activePath, rollbackPath)
+    await rename(candidatePath, activePath)
+
+    await fixture.store.rollbackRotation()
+
+    expect(await readFile(activePath)).toEqual(originalCiphertext)
+    expect(await readdir(fixture.directory)).toEqual(['agora-agent-key.cred'])
+  })
+
+  it('finishes interrupted rollback and commit transitions idempotently', async () => {
+    const rollbackFixture = await createFixture()
+    const original = createKey()
+    const replacement = createKey()
+    await install(rollbackFixture, original)
+    const originalCiphertext = await readFile(rollbackFixture.store.activePath)
+    await rollbackFixture.store.rotate(
+      Buffer.from(replacement),
+      fingerprintApplicationKey(replacement)
+    )
+    let state = await rollbackFixture.store.rotationState.read()
+    state = await rollbackFixture.store.rotationState.write(state, 'rolling-back')
+    await rename(
+      rollbackFixture.store.activePath,
+      rollbackFixture.store.rotationState.candidatePath(state)
+    )
+
+    await rollbackFixture.store.rollbackRotation()
+    expect(await readFile(rollbackFixture.store.activePath)).toEqual(originalCiphertext)
+    expect(await readdir(rollbackFixture.directory)).toEqual(['agora-agent-key.cred'])
+
+    const commitFixture = await createFixture()
+    await install(commitFixture, original)
+    await commitFixture.store.rotate(
+      Buffer.from(replacement),
+      fingerprintApplicationKey(replacement)
+    )
+    state = await commitFixture.store.rotationState.read()
+    await commitFixture.store.rotationState.write(state, 'committing')
+    await unlink(commitFixture.store.rollbackPath)
+
+    await commitFixture.store.commitRotation()
+    expect(await readdir(commitFixture.directory)).toEqual(['agora-agent-key.cred'])
+  })
+
+  it('recovers the exact legacy crash shape reported by review', async () => {
+    const fixture = await createFixture()
+    const original = createKey()
+    await install(fixture, original)
+    const originalCiphertext = await readFile(fixture.store.activePath)
+    await rename(fixture.store.activePath, fixture.store.rollbackPath)
+
+    await fixture.store.rollbackRotation()
+
+    expect(await readFile(fixture.store.activePath)).toEqual(originalCiphertext)
+    expect(await readdir(fixture.directory)).toEqual(['agora-agent-key.cred'])
+  })
+
+  it('keeps raw keys out of durable rotation state', async () => {
+    const fixture = await createFixture()
+    const original = createKey()
+    const replacement = createKey()
+    await install(fixture, original)
+    await fixture.store.rotate(
+      Buffer.from(replacement),
+      fingerprintApplicationKey(replacement)
+    )
+    const state = await readFile(
+      path.join(fixture.directory, '.agora-agent-key.rotation.json'),
+      'utf8'
+    )
+
+    expect(state).not.toContain(original)
+    expect(state).not.toContain(replacement)
+    expect(state).toContain(fingerprintApplicationKey(replacement))
   })
 
   it('rolls back a staged replacement and validates the restored credential', async () => {

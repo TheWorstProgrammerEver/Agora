@@ -1,5 +1,6 @@
 import { randomBytes, randomUUID } from 'node:crypto'
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
+import { constants as fsConstants } from 'node:fs'
+import { mkdtemp, open, readFile, readdir, rename, rm } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { runCommand } from '../../scripts/agent-keys/command.mjs'
@@ -102,6 +103,16 @@ const assertNoRawCredentialFile = async () => {
   }
 }
 
+const syncDirectory = async () => {
+  const handle = await open(directory, fsConstants.O_RDONLY | fsConstants.O_DIRECTORY)
+
+  try {
+    await handle.sync()
+  } finally {
+    await handle.close()
+  }
+}
+
 const store = new SystemdCredentialStore({
   directory,
   ownerUid: 0,
@@ -120,6 +131,39 @@ try {
 
   await store.install(Buffer.from(original), originalFingerprint)
   await assertNoRawCredentialFile()
+
+  for (const checkpoint of ['old-renamed', 'replacement-renamed', 'replacement-durable']) {
+    const interruptedReplacement = createKey()
+    let state = store.rotationState.create(
+      fingerprintApplicationKey(interruptedReplacement)
+    )
+    state = await store.rotationState.write(state)
+    const candidatePath = store.rotationState.candidatePath(state)
+    const secret = Buffer.from(interruptedReplacement)
+
+    try {
+      await store.sealCandidate(secret, state.fingerprint, candidatePath)
+    } finally {
+      secret.fill(0)
+    }
+    await store.rotationState.write(state, 'installing')
+    await rename(store.activePath, store.rollbackPath)
+
+    if (checkpoint !== 'old-renamed') {
+      await syncDirectory()
+      await rename(candidatePath, store.activePath)
+    }
+
+    if (checkpoint === 'replacement-durable') {
+      await syncDirectory()
+    }
+
+    await store.rollbackRotation()
+
+    if (observedFingerprints.at(-1) !== originalFingerprint) {
+      throw new Error(`Interrupted rotation recovery failed at ${checkpoint}.`)
+    }
+  }
 
   rejectNextValidation = true
   await store.rotate(

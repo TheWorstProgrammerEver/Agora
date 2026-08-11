@@ -1,14 +1,16 @@
+import { constants as fsConstants } from 'node:fs'
+import { createHash, timingSafeEqual } from 'node:crypto'
 import {
   chmod,
   lstat,
   mkdir,
   open,
+  readdir,
   rename,
   unlink
 } from 'node:fs/promises'
-import { constants as fsConstants } from 'node:fs'
-import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import path from 'node:path'
+import { CredentialRotationState } from './credential-rotation-state.mjs'
 import { runCommand } from './command.mjs'
 import {
   fingerprintApplicationKey,
@@ -21,6 +23,7 @@ export const credentialDirectory = '/etc/credstore.encrypted'
 export const credentialPath = `${credentialDirectory}/${credentialName}.cred`
 
 const systemdCredsPath = '/usr/bin/systemd-creds'
+const encryptedArtifactPattern = /^\.agora-agent-key\.[0-9a-f-]+\.(candidate|replacement)\.cred$/
 
 const pathExists = async (target) => {
   try {
@@ -35,8 +38,8 @@ const pathExists = async (target) => {
   }
 }
 
-const syncDirectory = async (directory) => {
-  const handle = await open(directory, fsConstants.O_RDONLY | fsConstants.O_DIRECTORY)
+const syncPath = async (target, flags) => {
+  const handle = await open(target, flags)
 
   try {
     await handle.sync()
@@ -44,6 +47,13 @@ const syncDirectory = async (directory) => {
     await handle.close()
   }
 }
+
+const syncDirectory = (directory) => syncPath(
+  directory,
+  fsConstants.O_RDONLY | fsConstants.O_DIRECTORY
+)
+
+const syncFile = (target) => syncPath(target, fsConstants.O_RDONLY)
 
 const assertContained = (trustedRoot, target) => {
   const relative = path.relative(trustedRoot, target)
@@ -86,6 +96,17 @@ const assertProtectedCredential = async (target, ownerUid) => {
   }
 }
 
+const validateCandidateInput = (applicationKey, expectedFingerprint) => {
+  const keyText = validateApplicationKey(applicationKey.toString('utf8'))
+  const fingerprint = fingerprintApplicationKey(keyText)
+
+  if (fingerprint !== validateFingerprint(expectedFingerprint)) {
+    throw new Error('Agora agent key does not match the expected fingerprint.')
+  }
+
+  return fingerprint
+}
+
 export class SystemdCredentialStore {
   constructor({
     directory = credentialDirectory,
@@ -99,6 +120,11 @@ export class SystemdCredentialStore {
     this.directory = directory
     this.ownerUid = ownerUid
     this.rollbackPath = path.join(directory, `.${credentialName}.rollback.cred`)
+    this.rotationState = new CredentialRotationState({
+      directory,
+      ownerUid,
+      syncDirectory
+    })
     this.run = run
     this.trustedRoot = trustedRoot
     this.validateActive = validateActive
@@ -132,95 +158,124 @@ export class SystemdCredentialStore {
   }
 
   async install(applicationKey, expectedFingerprint) {
+    const fingerprint = validateCandidateInput(applicationKey, expectedFingerprint)
     await this.prepare()
 
-    if (await pathExists(this.activePath) || await pathExists(this.rollbackPath)) {
+    if (
+      await pathExists(this.activePath)
+      || await pathExists(this.rollbackPath)
+      || await this.rotationState.read()
+    ) {
       throw new Error('An encrypted Agora agent credential already exists.')
     }
 
-    const candidate = await this.sealCandidate(applicationKey, expectedFingerprint)
+    const candidatePath = path.join(
+      this.directory,
+      `.${credentialName}.install.candidate.cred`
+    )
+
+    if (await pathExists(candidatePath)) {
+      throw new Error('An interrupted encrypted credential installation requires operator recovery.')
+    }
 
     try {
-      await rename(candidate.path, this.activePath)
+      await this.sealCandidate(applicationKey, fingerprint, candidatePath)
+      await rename(candidatePath, this.activePath)
       await syncDirectory(this.directory)
-      await this.validateActive({ fingerprint: candidate.fingerprint, path: this.activePath })
-      return candidate.fingerprint
+      await this.validateActive({ fingerprint, path: this.activePath })
+      return fingerprint
     } catch (error) {
       await this.removeIfPresent(this.activePath)
-      await this.removeIfPresent(candidate.path)
+      await this.removeCandidateIfPresent(candidatePath)
       throw error
     }
   }
 
   async rotate(applicationKey, expectedFingerprint) {
+    const fingerprint = validateCandidateInput(applicationKey, expectedFingerprint)
     await this.prepare()
+    await this.reconcileBeforeRotation()
     await assertProtectedCredential(this.activePath, this.ownerUid)
 
     if (await pathExists(this.rollbackPath)) {
       throw new Error('A previous encrypted credential is still awaiting commit or rollback.')
     }
 
-    const candidate = await this.sealCandidate(applicationKey, expectedFingerprint)
+    let state = this.rotationState.create(fingerprint)
 
     try {
+      state = await this.rotationState.write(state)
+      const candidatePath = this.rotationState.candidatePath(state)
+      await this.sealCandidate(applicationKey, fingerprint, candidatePath)
+      state = await this.rotationState.write(state, 'installing')
       await rename(this.activePath, this.rollbackPath)
-      await rename(candidate.path, this.activePath)
       await syncDirectory(this.directory)
-      await this.validateActive({ fingerprint: candidate.fingerprint, path: this.activePath })
-      return candidate.fingerprint
+      await rename(candidatePath, this.activePath)
+      await syncDirectory(this.directory)
+      await this.validateActive({ fingerprint, path: this.activePath })
+      await this.rotationState.write(state, 'staged')
+      return fingerprint
     } catch (error) {
-      if (await pathExists(this.rollbackPath)) {
-        await this.removeIfPresent(this.activePath)
-        await rename(this.rollbackPath, this.activePath)
-        await syncDirectory(this.directory)
-        await this.validateActive({ path: this.activePath })
+      try {
+        const currentState = await this.rotationState.read()
+
+        if (currentState && ['preparing', 'installing', 'rolling-back'].includes(currentState.phase)) {
+          await this.recoverOriginal(currentState)
+        }
+      } catch {
+        throw new Error('Credential rotation failed and requires an explicit rollback recovery.')
       }
-      await this.removeIfPresent(candidate.path)
+
       throw error
     }
   }
 
   async commitRotation() {
     await this.prepare()
-    await assertProtectedCredential(this.activePath, this.ownerUid)
-    await assertProtectedCredential(this.rollbackPath, this.ownerUid)
-    await unlink(this.rollbackPath)
-    await syncDirectory(this.directory)
+    let state = await this.rotationState.read()
+
+    if (!state) {
+      throw new Error('No encrypted credential rotation is awaiting commit.')
+    }
+
+    if (['preparing', 'installing', 'rolling-back'].includes(state.phase)) {
+      throw new Error('Interrupted credential rotation must be rolled back with service validation.')
+    }
+
+    if (state.phase === 'staged') {
+      await assertProtectedCredential(this.activePath, this.ownerUid)
+      await assertProtectedCredential(this.rollbackPath, this.ownerUid)
+      state = await this.rotationState.write(state, 'committing')
+    }
+
+    await this.finishCommit(state)
   }
 
   async rollbackRotation() {
     await this.prepare()
-    await assertProtectedCredential(this.activePath, this.ownerUid)
-    await assertProtectedCredential(this.rollbackPath, this.ownerUid)
-    const replacementPath = path.join(
-      this.directory,
-      `.${credentialName}.${randomUUID()}.replacement.cred`
-    )
-    let activeMoved = false
-    let rollbackMoved = false
+    const state = await this.rotationState.read()
 
-    try {
-      await rename(this.activePath, replacementPath)
-      activeMoved = true
-      await rename(this.rollbackPath, this.activePath)
-      rollbackMoved = true
-      await syncDirectory(this.directory)
-      await this.validateActive({ path: this.activePath })
-      await unlink(replacementPath)
-      await syncDirectory(this.directory)
-    } catch (error) {
-      if (rollbackMoved && await pathExists(this.activePath)) {
-        await rename(this.activePath, this.rollbackPath)
-      }
-      if (activeMoved && await pathExists(replacementPath)) {
-        await rename(replacementPath, this.activePath)
-      }
-      await syncDirectory(this.directory)
-      if (await pathExists(this.activePath)) {
+    if (!state) {
+      if (!await pathExists(this.activePath) && await pathExists(this.rollbackPath)) {
+        await assertProtectedCredential(this.rollbackPath, this.ownerUid)
+        await rename(this.rollbackPath, this.activePath)
+        await syncDirectory(this.directory)
         await this.validateActive({ path: this.activePath })
+        return
       }
-      throw error
+
+      throw new Error('No encrypted credential rotation is awaiting rollback.')
     }
+
+    if (state.phase === 'committing') {
+      throw new Error('Credential rotation commit is already in progress; rollback is denied.')
+    }
+
+    const rollbackState = state.phase === 'staged'
+      ? await this.rotationState.write(state, 'rolling-back')
+      : state
+
+    await this.recoverOriginal(rollbackState)
   }
 
   async revoke(stopService = async () => {}) {
@@ -233,27 +288,88 @@ export class SystemdCredentialStore {
       stopError = error
     }
 
-    await this.removeIfPresent(this.activePath)
-    await this.removeIfPresent(this.rollbackPath)
+    for (const filename of await readdir(this.directory)) {
+      const target = path.join(this.directory, filename)
+
+      if (
+        target === this.activePath
+        || target === this.rollbackPath
+        || filename === `.${credentialName}.install.candidate.cred`
+        || encryptedArtifactPattern.test(filename)
+      ) {
+        await this.removeIfPresent(target)
+      }
+    }
+
+    await this.rotationState.remove()
 
     if (stopError) {
       throw stopError
     }
   }
 
-  async sealCandidate(applicationKey, expectedFingerprint) {
-    const keyText = validateApplicationKey(applicationKey.toString('utf8'))
-    const fingerprint = fingerprintApplicationKey(keyText)
+  async reconcileBeforeRotation() {
+    const state = await this.rotationState.read()
 
-    if (fingerprint !== validateFingerprint(expectedFingerprint)) {
-      throw new Error('Agora agent key does not match the expected fingerprint.')
+    if (!state) {
+      return
     }
 
-    const candidatePath = path.join(
-      this.directory,
-      `.${credentialName}.${randomUUID()}.candidate.cred`
-    )
+    if (['preparing', 'installing', 'rolling-back'].includes(state.phase)) {
+      await this.recoverOriginal(state)
+      return
+    }
 
+    if (state.phase === 'committing') {
+      await this.finishCommit(state)
+      return
+    }
+
+    throw new Error('A previous encrypted credential is still awaiting commit or rollback.')
+  }
+
+  async recoverOriginal(state) {
+    const candidatePath = this.rotationState.candidatePath(state)
+    const activeExists = await pathExists(this.activePath)
+    const rollbackExists = await pathExists(this.rollbackPath)
+    const candidateExists = await pathExists(candidatePath)
+
+    if (state.phase === 'preparing') {
+      if (!activeExists || rollbackExists) {
+        throw new Error('Interrupted credential rotation has inconsistent protected state.')
+      }
+    } else if (rollbackExists && activeExists && candidateExists) {
+      throw new Error('Interrupted credential rotation has ambiguous protected state.')
+    } else if (rollbackExists) {
+      if (activeExists) {
+        await rename(this.activePath, candidatePath)
+        await syncDirectory(this.directory)
+      }
+
+      await rename(this.rollbackPath, this.activePath)
+      await syncDirectory(this.directory)
+    } else if (!activeExists) {
+      throw new Error('Interrupted credential rotation cannot recover the original credential.')
+    }
+
+    await assertProtectedCredential(this.activePath, this.ownerUid)
+    await this.validateActive({ path: this.activePath })
+    await this.removeCandidateIfPresent(candidatePath)
+    await this.rotationState.remove()
+  }
+
+  async finishCommit(state) {
+    if (state.phase !== 'committing') {
+      throw new Error('Credential rotation state cannot be committed.')
+    }
+
+    await assertProtectedCredential(this.activePath, this.ownerUid)
+    await this.removeIfPresent(this.rollbackPath)
+    await this.removeCandidateIfPresent(this.rotationState.candidatePath(state))
+    await this.rotationState.remove()
+  }
+
+  async sealCandidate(applicationKey, fingerprint, candidatePath) {
     try {
       await this.run(systemdCredsPath, [
         ...(this.withKey === 'null' ? ['--allow-null'] : []),
@@ -266,6 +382,8 @@ export class SystemdCredentialStore {
       ], { input: applicationKey })
       await chmod(candidatePath, 0o600)
       await assertProtectedCredential(candidatePath, this.ownerUid)
+      await syncFile(candidatePath)
+      await syncDirectory(this.directory)
 
       const decrypted = await this.run(systemdCredsPath, [
         ...(this.withKey === 'null' ? ['--allow-null'] : []),
@@ -287,7 +405,7 @@ export class SystemdCredentialStore {
         decrypted.fill(0)
       }
 
-      return { fingerprint, path: candidatePath }
+      return fingerprint
     } catch (error) {
       await this.removeCandidateIfPresent(candidatePath)
       throw error
@@ -310,12 +428,7 @@ export class SystemdCredentialStore {
     }
 
     assertContained(this.directory, target)
-    const metadata = await lstat(target)
-
-    if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.uid !== this.ownerUid) {
-      throw new Error('Operation-owned credential candidate has unsafe metadata.')
-    }
-
+    await assertProtectedCredential(target, this.ownerUid)
     await unlink(target)
     await syncDirectory(this.directory)
   }
