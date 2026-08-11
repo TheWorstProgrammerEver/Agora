@@ -1,6 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import { runCommand } from '../../../scripts/agent-keys/command.mjs'
+import { elevatedNodeInvocation } from '../../../scripts/agent-keys/elevated-node.mjs'
 import { fingerprintApplicationKey } from '../../../scripts/agent-keys/key-format.mjs'
 import { runOperatorCommand } from '../../../scripts/agent-keys/operator-cli.mjs'
 import { runCredentialCommand } from '../../../scripts/agent-keys/systemd-credential-cli.mjs'
@@ -64,6 +65,25 @@ describe('operator agent-key CLI', () => {
 })
 
 describe('host agent-key CLI', () => {
+  it('elevates with the resolved absolute Node runtime instead of sudo PATH lookup', () => {
+    const entrypoint = '/opt/agora/systemd-credential-cli.mjs'
+    const invocation = elevatedNodeInvocation({
+      args: ['commit'],
+      entrypoint,
+      nodePath: process.execPath,
+      uid: 1000
+    })
+
+    expect(invocation.file).toBe('/usr/bin/sudo')
+    expect(invocation.args).toEqual([
+      '-n',
+      '--',
+      process.execPath,
+      entrypoint,
+      'commit'
+    ])
+  })
+
   it('passes the raw key only as an in-memory buffer and zeroes it after install', async () => {
     const applicationKey = createKey()
     const secret = Buffer.from(applicationKey)

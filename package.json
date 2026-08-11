@@ -11,7 +11,7 @@
     "preflight": "node scripts/preflight.mjs",
     "get-going": "node scripts/get-going.mjs",
     "all-done": "node scripts/all-done.mjs",
-    "agent-keys:host": "node scripts/agent-keys/systemd-credential-cli.mjs",
+    "agent-keys:host": "scripts/agent-keys/systemd-credential-launcher.mjs",
     "agent-keys:operator": "node scripts/agent-keys/operator-cli.mjs",
     "build": "tsc -b && vite build",
     "build:netlify": "node scripts/build-netlify.mjs",

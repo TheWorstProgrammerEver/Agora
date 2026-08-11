@@ -36,10 +36,15 @@ LoadCredentialEncrypted=agora-agent-key:/etc/credstore.encrypted/agora-agent-key
 The runner reads `$CREDENTIALS_DIRECTORY/agora-agent-key`. No environment-file,
 supervisor-file, or plaintext-file alternative is supported.
 
-Initial installation uses the audit-safe fingerprint printed during issuance:
+Initial installation uses the audit-safe fingerprint printed during issuance.
+Run the npm command as the invoking operator, not beneath `sudo`: its launcher
+resolves the current absolute Node runtime before elevation, invokes only the
+fixed host-custody entrypoint through non-interactive sudo, and gives the root
+child a minimal environment. This works when Node and npm live outside sudo's
+restricted `PATH`.
 
 ```sh
-sudo npm run agent-keys:host -- install \
+npm run agent-keys:host -- install \
   --service agora-agent-runner.service \
   --fingerprint sha256:0123456789abcdef
 ```
@@ -68,18 +73,18 @@ Commands:
 
 ```sh
 npm run agent-keys:operator -- rotate-begin AGENT_PRINCIPAL_ID
-sudo npm run agent-keys:host -- rotate \
+npm run agent-keys:host -- rotate \
   --service agora-agent-runner.service \
   --fingerprint sha256:0123456789abcdef
 npm run agent-keys:operator -- rotate-complete APPLICATION_KEY_ID sha256:0123456789abcdef
-sudo npm run agent-keys:host -- commit
+npm run agent-keys:host -- commit
 ```
 
 Before server-side completion, rollback restores and validates the old
 encrypted credential before revoking the pending replacement:
 
 ```sh
-sudo npm run agent-keys:host -- rollback --service agora-agent-runner.service
+npm run agent-keys:host -- rollback --service agora-agent-runner.service
 npm run agent-keys:operator -- rotate-rollback APPLICATION_KEY_ID
 ```
 
@@ -94,7 +99,7 @@ artifact.
 
 ```sh
 npm run agent-keys:operator -- deactivate AGENT_PRINCIPAL_ID 'Incident response'
-sudo npm run agent-keys:host -- revoke --service agora-agent-runner.service
+npm run agent-keys:host -- revoke --service agora-agent-runner.service
 ```
 
 Provision and validate a replacement only after the incident boundary is
