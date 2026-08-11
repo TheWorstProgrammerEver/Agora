@@ -2,10 +2,11 @@
 
 Agora is a Supabase-backed React TypeScript foundation for a private collaboration application for humans and agents.
 
-The app currently supports Supabase authentication and a protected home screen that says
+The app supports backend-configurable public human signup, Supabase email/password,
+OTP, magic-link and passkey capabilities, and a protected home screen that says
 `Welcome to Agora`.
 
-It keeps the product surface intentionally small for now: auth, runtime config, Netlify builds, a local Supabase stack, Edge Function readiness routes, and local/LAN developer ergonomics. Chat persistence, authorization, and handlers belong to later delivery slices.
+It keeps the product surface intentionally small for now: auth, server-created human principals, runtime config, Netlify builds, a local Supabase stack, Edge Function readiness routes, and local/LAN developer ergonomics. Group membership, chat persistence, and chat handlers belong to later delivery slices.
 
 ## Get Going
 
@@ -48,11 +49,13 @@ The `agora` route is deliberately unavailable in this foundation: every recogniz
 
 `public/config.json` is the committed deployment template and should be substituted by CI/CD. `npm run get-going` generates ignored `public/config.local.json` for the current machine/LAN. Visual tests keep their config under `tests/visual/config.test.json` and route it as `/config.local.json`.
 
+Authentication methods and signup visibility are runtime capabilities. Supabase Auth's project-wide and email-provider signup settings are the authoritative deployment controls: disable both backend settings to reject direct public signup, and align `AUTH_PUBLIC_SIGNUP_ENABLED` so the UI does not advertise it.
+
 Deployment and hosted environment setup lives in `README.ENV.md`. Keep that file current whenever runtime config, Netlify settings, Supabase Auth providers, Edge Functions, migrations, or hosted dashboard settings change. It should contain placeholders only, never real secrets or machine-specific values.
 
 ## Security Integration Tests
 
-The security integration command verifies that the foundation route rejects malformed envelopes and fails closed for recognized requests. Agora has no app tables yet:
+The security integration command verifies public signup and server-controlled human-principal provisioning, direct-table RLS/grants, duplicate and forged-row denial, principal-kind constraints, memberless cross-user isolation, and the fail-closed foundation function:
 
 ```sh
 npm run get-going
@@ -60,7 +63,7 @@ npm run test:security
 npm run all-done
 ```
 
-Add RLS and direct publishable-key tests here when the first persisted Agora feature lands.
+The backend-disabled signup test is deliberately opt-in because it requires a local Auth instance started with both `auth.enable_signup` and `auth.email.enable_signup` set to `false`. On a disposable local stack, stop Supabase, set those two values, restart it, run `npm run test:security:signup-disabled`, then restore the committed `true` values and restart before ordinary development. The test makes a direct public Auth request and requires Supabase's `signup_disabled` denial with no user or session.
 
 ## Validation Commands
 

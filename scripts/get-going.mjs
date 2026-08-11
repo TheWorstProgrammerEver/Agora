@@ -111,6 +111,7 @@ const writeLocalConfig = (lanAddress) => {
     configTemplate
       .replaceAll('"#{BUILD_VERSION}#"', '"dev"')
       .replaceAll('"#{ENVIRONMENT}#"', '"local"')
+      .replaceAll('#{AUTH_PUBLIC_SIGNUP_ENABLED}#', 'true')
       .replaceAll('#{AUTH_EMAIL_PASSWORD_ENABLED}#', 'true')
       .replaceAll('#{AUTH_PASSKEY_ENABLED}#', 'true')
       .replaceAll('#{AUTH_OTP_ENABLED}#', 'true')

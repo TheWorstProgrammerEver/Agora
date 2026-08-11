@@ -3,6 +3,7 @@
   "buildVersion": "test",
   "environment": "test",
   "auth": {
+    "publicSignup": true,
     "supportedTypes": {
       "emailPassword": true,
       "passkey": true,

@@ -18,7 +18,7 @@ const initialsFrom = (value: unknown) => (
 )
 
 export const AuthPanel = (props: AuthPanelProps) => {
-  const { appName, environment, onStatusClear, supportedTypes } = props
+  const { appName, environment, onStatusClear, publicSignup = true, supportedTypes } = props
   const mark = initialsFrom(appName)
   const [mode, setMode] = useState<AuthMode>('sign-in')
   const enabledTypes = getEnabledAuthenticationTypes(supportedTypes)
@@ -47,13 +47,13 @@ export const AuthPanel = (props: AuthPanelProps) => {
         )}
       </div>
 
-      <footer className={styles.switcher}>
-        {signingIn ? (
+      {(publicSignup || !signingIn) && <footer className={styles.switcher}>
+        {signingIn && publicSignup ? (
           <p>New to {appName}? <button type="button" onClick={() => setAuthMode('create')}>Create an account</button></p>
         ) : (
           <p>Already have an account? <button type="button" onClick={() => setAuthMode('sign-in')}>Sign in</button></p>
         )}
-      </footer>
+      </footer>}
     </section>
   )
 }

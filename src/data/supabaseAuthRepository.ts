@@ -12,12 +12,16 @@ type SignUpCredentials = AuthCredentials & {
   name: string
 }
 
-type EmailOnlyCredentials = {
+type EmailCredentials = {
   email: string
   name: string
 }
 
-type OtpCredentials = EmailOnlyCredentials & {
+type EmailOnlyCredentials = EmailCredentials & {
+  shouldCreateUser: boolean
+}
+
+type OtpCredentials = EmailCredentials & {
   token: string
 }
 
@@ -40,17 +44,17 @@ const passkeyFromSupabase = (passkey: {
   lastUsedAt: passkey.last_used_at
 })
 
-const metadataName = (user: User) => {
-  const displayName = user.user_metadata?.display_name
-
-  return typeof displayName === 'string' ? displayName.trim() : ''
+type HumanPrincipalRow = {
+  created_at: string
+  display_name: string
+  id: string
 }
 
-const accountFromUser = (user: User, preferredName?: string): Account => ({
-  id: user.id,
+const accountFromPrincipal = (user: User, principal: HumanPrincipalRow): Account => ({
+  id: principal.id,
   email: normalizeEmail(user.email ?? ''),
-  name: preferredName?.trim() || metadataName(user) || nameFromEmail(user.email ?? ''),
-  createdDate: user.created_at?.slice(0, 10) ?? new Date().toISOString().slice(0, 10)
+  name: principal.display_name,
+  createdDate: principal.created_at.slice(0, 10)
 })
 
 export const getCurrentSession = async () => {
@@ -69,8 +73,19 @@ export const onAuthSessionChange = (onChange: (session: Session | null) => void)
   return () => data.subscription.unsubscribe()
 }
 
-export const getAccountForUser = async (user: User, preferredName?: string): Promise<Account> => {
-  return accountFromUser(user, preferredName)
+export const getAccountForUser = async (user: User): Promise<Account> => {
+  const { data, error } = await supabase
+    .from('principals')
+    .select('id, display_name, created_at')
+    .eq('kind', 'human')
+    .eq('auth_user_id', user.id)
+    .single<HumanPrincipalRow>()
+
+  if (error) {
+    throw error
+  }
+
+  return accountFromPrincipal(user, data)
 }
 
 export const signInWithPassword = async ({ email, password }: AuthCredentials) => {
@@ -122,14 +137,14 @@ export const signUpWithPassword = async ({ email, name, password }: SignUpCreden
     throw error
   }
 
-  if (!data.user || !data.session) {
-    throw new Error('Check your email to finish creating your account, then sign in.')
+  if (!data.user) {
+    throw new Error('Supabase did not return a created user.')
   }
 
-  return getAccountForUser(data.user, displayName)
+  return data.session ? getAccountForUser(data.user) : undefined
 }
 
-export const requestOneTimePassword = async ({ email, name }: EmailOnlyCredentials) => {
+export const requestOneTimePassword = async ({ email, name, shouldCreateUser }: EmailOnlyCredentials) => {
   const normalizedEmail = normalizeEmail(email)
   const displayName = name.trim() || nameFromEmail(normalizedEmail)
   const { error } = await supabase.auth.signInWithOtp({
@@ -138,7 +153,7 @@ export const requestOneTimePassword = async ({ email, name }: EmailOnlyCredentia
       data: {
         display_name: displayName
       },
-      shouldCreateUser: true
+      shouldCreateUser
     }
   })
 
@@ -147,9 +162,8 @@ export const requestOneTimePassword = async ({ email, name }: EmailOnlyCredentia
   }
 }
 
-export const verifyOneTimePassword = async ({ email, name, token }: OtpCredentials) => {
+export const verifyOneTimePassword = async ({ email, token }: OtpCredentials) => {
   const normalizedEmail = normalizeEmail(email)
-  const displayName = name.trim() || nameFromEmail(normalizedEmail)
   const { data, error } = await supabase.auth.verifyOtp({
     email: normalizedEmail,
     token: token.trim(),
@@ -164,10 +178,10 @@ export const verifyOneTimePassword = async ({ email, name, token }: OtpCredentia
     throw new Error('Supabase did not return a signed-in user.')
   }
 
-  return getAccountForUser(data.user, displayName)
+  return getAccountForUser(data.user)
 }
 
-export const sendMagicLink = async ({ email, name }: EmailOnlyCredentials) => {
+export const sendMagicLink = async ({ email, name, shouldCreateUser }: EmailOnlyCredentials) => {
   const normalizedEmail = normalizeEmail(email)
   const displayName = name.trim() || nameFromEmail(normalizedEmail)
   const { error } = await supabase.auth.signInWithOtp({
@@ -177,7 +191,7 @@ export const sendMagicLink = async ({ email, name }: EmailOnlyCredentials) => {
         display_name: displayName
       },
       emailRedirectTo: window.location.origin,
-      shouldCreateUser: true
+      shouldCreateUser
     }
   })
 

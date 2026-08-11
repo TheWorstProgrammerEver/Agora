@@ -1,4 +1,3 @@
-import { getSupportedAuthenticationTypes } from '../../domain/auth'
 import { useAuthContext } from '../../contexts/AuthContext'
 
 export const useAuthScreenViewModel = () => {
@@ -9,11 +8,13 @@ export const useAuthScreenViewModel = () => {
     authReady,
     clearAuthStatus,
     currentAccount,
+    publicSignup,
     requestOtp,
     sendMagicLink,
     signIn,
     signInWithPasskey,
     signUp,
+    supportedTypes,
     verifyOtp
   } = useAuthContext()
 
@@ -29,7 +30,8 @@ export const useAuthScreenViewModel = () => {
     signInWithPasskey,
     signUp,
     signedIn: Boolean(currentAccount),
-    supportedTypes: getSupportedAuthenticationTypes(),
+    publicSignup,
+    supportedTypes,
     verifyOtp
   }
 }

@@ -3,6 +3,7 @@
   "buildVersion": "#{BUILD_VERSION}#",
   "environment": "#{ENVIRONMENT}#",
   "auth": {
+    "publicSignup": #{AUTH_PUBLIC_SIGNUP_ENABLED}#,
     "supportedTypes": {
       "emailPassword": #{AUTH_EMAIL_PASSWORD_ENABLED}#,
       "passkey": #{AUTH_PASSKEY_ENABLED}#,

@@ -77,7 +77,7 @@ export const CreateAccountForm = ({
     onStatusClear()
 
     if (method === 'magicLink') {
-      void onMagicLink(email, accountDisplayName)
+      void onMagicLink(email, accountDisplayName, true)
       return
     }
 
@@ -88,7 +88,7 @@ export const CreateAccountForm = ({
       }
 
       setOtpSent(true)
-      void onOtpRequest(email, accountDisplayName)
+      void onOtpRequest(email, accountDisplayName, true)
       return
     }
 
