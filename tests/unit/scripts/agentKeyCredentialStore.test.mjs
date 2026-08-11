@@ -1,17 +1,46 @@
 import { mkdtemp, readFile, readdir, rename, unlink, writeFile } from 'node:fs/promises'
+import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { fingerprintApplicationKey } from '../../../scripts/agent-keys/key-format.mjs'
 import { SystemdCredentialStore } from '../../../scripts/agent-keys/systemd-credential-store.mjs'
+import { acquireRuntimeStateCoordinator } from '../../../scripts/runtime-state-coordinator.mjs'
 
 const temporaryRoots = []
 const plaintextBuffers = []
 
 const createKey = () => `agora_agent_v1_${randomBytes(32).toString('base64url')}`
 
-const createFixture = async () => {
+const deferred = () => {
+  let resolve
+  const promise = new Promise((settle) => {
+    resolve = settle
+  })
+
+  return { promise, resolve }
+}
+
+const getAvailablePort = () => new Promise((resolve, reject) => {
+  const server = createServer()
+
+  server.once('error', reject)
+  server.listen({ host: '127.0.0.1', port: 0 }, () => {
+    const address = server.address()
+
+    server.close((error) => {
+      if (error) {
+        reject(error)
+        return
+      }
+
+      resolve(address.port)
+    })
+  })
+})
+
+const createFixture = async (storeOptions = {}) => {
   const trustedRoot = await mkdtemp(path.join(tmpdir(), 'agora-agent-key-test-'))
   const directory = path.join(trustedRoot, 'credstore.encrypted')
   const plaintextByCandidate = new Map()
@@ -36,17 +65,29 @@ const createFixture = async () => {
     throw new Error('Unexpected test command.')
   })
   const validateActive = vi.fn(async () => {})
-  const store = new SystemdCredentialStore({
+  const createStore = (overrides = {}) => new SystemdCredentialStore({
     directory,
     ownerUid: process.getuid(),
     run,
     trustedRoot,
-    validateActive
+    validateActive,
+    ...storeOptions,
+    ...overrides
   })
+  const store = createStore()
 
   temporaryRoots.push(trustedRoot)
 
-  return { commands, directory, plaintextByCandidate, store, validateActive }
+  return {
+    commands,
+    createStore,
+    directory,
+    plaintextByCandidate,
+    run,
+    store,
+    trustedRoot,
+    validateActive
+  }
 }
 
 const install = async (fixture, key) => fixture.store.install(
@@ -65,6 +106,115 @@ afterEach(async () => {
 })
 
 describe('systemd encrypted credential custody', () => {
+  it('coordinates every credential-store mutation before touching protected state', async () => {
+    const port = await getAvailablePort()
+    const fixture = await createFixture({
+      coordinatorOptions: { port, timeoutMs: 0 }
+    })
+    const release = await acquireRuntimeStateCoordinator(
+      `agora-agent-credential:${fixture.store.activePath}`,
+      { port }
+    )
+    const key = createKey()
+    const stopService = vi.fn(async () => {})
+
+    try {
+      const mutations = [
+        () => fixture.store.install(Buffer.from(key), fingerprintApplicationKey(key)),
+        () => fixture.store.rotate(Buffer.from(key), fingerprintApplicationKey(key)),
+        () => fixture.store.commitRotation(),
+        () => fixture.store.rollbackRotation(),
+        () => fixture.store.revoke(stopService)
+      ]
+
+      for (const mutate of mutations) {
+        await expect(mutate()).rejects.toThrow(
+          'Agora agent credential store is busy; retry the host credential command.'
+        )
+      }
+
+      expect(await readdir(fixture.trustedRoot)).toEqual([])
+      expect(fixture.run).not.toHaveBeenCalled()
+      expect(fixture.validateActive).not.toHaveBeenCalled()
+      expect(stopService).not.toHaveBeenCalled()
+    } finally {
+      await release()
+    }
+  })
+
+  it('serializes overlapping rotations and preserves the original rollback ciphertext', async () => {
+    const port = await getAvailablePort()
+    const firstSealing = deferred()
+    const finishFirstSeal = deferred()
+    const secondWaiting = deferred()
+    const retrySecond = deferred()
+    const fixture = await createFixture({
+      coordinatorOptions: { pollIntervalMs: 1, port, timeoutMs: 1000 }
+    })
+    const secondStore = fixture.createStore({
+      coordinatorOptions: {
+        pollIntervalMs: 1,
+        port,
+        sleep: async () => {
+          secondWaiting.resolve()
+          await retrySecond.promise
+        },
+        timeoutMs: 1000
+      }
+    })
+    const original = createKey()
+    const replacement = createKey()
+    let firstRotation
+    let secondRotation
+
+    try {
+      await install(fixture, original)
+      const originalCiphertext = await readFile(fixture.store.activePath)
+      const seal = fixture.run.getMockImplementation()
+      fixture.run.mockImplementationOnce(async (...args) => {
+        firstSealing.resolve()
+        await finishFirstSeal.promise
+        return seal(...args)
+      })
+
+      firstRotation = fixture.store.rotate(
+        Buffer.from(replacement),
+        fingerprintApplicationKey(replacement)
+      )
+      await firstSealing.promise
+
+      secondRotation = secondStore.rotate(
+        Buffer.from(replacement),
+        fingerprintApplicationKey(replacement)
+      )
+      const secondOutcome = await Promise.race([
+        secondWaiting.promise.then(() => 'waiting'),
+        secondRotation.then(
+          () => 'settled',
+          () => 'settled'
+        )
+      ])
+
+      expect(secondOutcome).toBe('waiting')
+      expect(await readFile(fixture.store.activePath)).toEqual(originalCiphertext)
+
+      finishFirstSeal.resolve()
+      await expect(firstRotation).resolves.toBe(fingerprintApplicationKey(replacement))
+      retrySecond.resolve()
+      await expect(secondRotation).rejects.toThrow(
+        'A previous encrypted credential is still awaiting commit or rollback.'
+      )
+
+      await fixture.store.rollbackRotation()
+      expect(await readFile(fixture.store.activePath)).toEqual(originalCiphertext)
+      expect(await readdir(fixture.directory)).toEqual(['agora-agent-key.cred'])
+    } finally {
+      finishFirstSeal.resolve()
+      retrySecond.resolve()
+      await Promise.allSettled([firstRotation, secondRotation].filter(Boolean))
+    }
+  })
+
   it('installs only ciphertext and keeps the raw key out of process arguments', async () => {
     const fixture = await createFixture()
     const key = createKey()

@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from 'node:crypto'
 import { constants as fsConstants } from 'node:fs'
-import { mkdtemp, open, readFile, readdir, rename, rm } from 'node:fs/promises'
+import { chmod, mkdtemp, open, readFile, readdir, rename, rm } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { runCommand } from '../../scripts/agent-keys/command.mjs'
@@ -113,6 +113,28 @@ const syncDirectory = async () => {
   }
 }
 
+const sealCrashFixtureCandidate = async (secret, candidatePath) => {
+  await checkedRun('/usr/bin/systemd-creds', [
+    '--allow-null',
+    '--with-key=null',
+    '--newline=no',
+    '--name=agora-agent-key',
+    'encrypt',
+    '-',
+    candidatePath
+  ], { input: secret })
+  await chmod(candidatePath, 0o600)
+  const handle = await open(candidatePath, fsConstants.O_RDONLY)
+
+  try {
+    await handle.sync()
+  } finally {
+    await handle.close()
+  }
+
+  await syncDirectory()
+}
+
 const store = new SystemdCredentialStore({
   directory,
   ownerUid: 0,
@@ -142,7 +164,7 @@ try {
     const secret = Buffer.from(interruptedReplacement)
 
     try {
-      await store.sealCandidate(secret, state.fingerprint, candidatePath)
+      await sealCrashFixtureCandidate(secret, candidatePath)
     } finally {
       secret.fill(0)
     }

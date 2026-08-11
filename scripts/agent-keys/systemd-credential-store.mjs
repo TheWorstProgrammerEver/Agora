@@ -10,6 +10,7 @@ import {
   unlink
 } from 'node:fs/promises'
 import path from 'node:path'
+import { withRuntimeStateCoordinator } from '../runtime-state-coordinator.mjs'
 import { CredentialRotationState } from './credential-rotation-state.mjs'
 import { runCommand } from './command.mjs'
 import {
@@ -108,12 +109,15 @@ const validateCandidateInput = (applicationKey, expectedFingerprint) => {
 }
 
 export class SystemdCredentialStore {
+  #coordinateMutation
+
   constructor({
     directory = credentialDirectory,
     ownerUid = 0,
     run = runCommand,
     trustedRoot = '/',
     validateActive = async () => {},
+    coordinatorOptions,
     withKey = 'host'
   } = {}) {
     this.activePath = path.join(directory, `${credentialName}.cred`)
@@ -128,6 +132,16 @@ export class SystemdCredentialStore {
     this.run = run
     this.trustedRoot = trustedRoot
     this.validateActive = validateActive
+    this.#coordinateMutation = (operation) => (
+      withRuntimeStateCoordinator(
+        `agora-agent-credential:${this.activePath}`,
+        operation,
+        {
+          ...coordinatorOptions,
+          busyMessage: 'Agora agent credential store is busy; retry the host credential command.'
+        }
+      )
+    )
 
     if (!['host', 'null'].includes(withKey)) {
       throw new Error('Unsupported systemd credential encryption key mode.')
@@ -136,7 +150,7 @@ export class SystemdCredentialStore {
     this.withKey = withKey
   }
 
-  async prepare() {
+  async #prepareWhileLocked() {
     assertContained(this.trustedRoot, this.directory)
 
     if (!await pathExists(this.directory)) {
@@ -158,8 +172,14 @@ export class SystemdCredentialStore {
   }
 
   async install(applicationKey, expectedFingerprint) {
+    return this.#coordinateMutation(
+      () => this.#installWhileLocked(applicationKey, expectedFingerprint)
+    )
+  }
+
+  async #installWhileLocked(applicationKey, expectedFingerprint) {
     const fingerprint = validateCandidateInput(applicationKey, expectedFingerprint)
-    await this.prepare()
+    await this.#prepareWhileLocked()
 
     if (
       await pathExists(this.activePath)
@@ -179,22 +199,28 @@ export class SystemdCredentialStore {
     }
 
     try {
-      await this.sealCandidate(applicationKey, fingerprint, candidatePath)
+      await this.#sealCandidate(applicationKey, fingerprint, candidatePath)
       await rename(candidatePath, this.activePath)
       await syncDirectory(this.directory)
       await this.validateActive({ fingerprint, path: this.activePath })
       return fingerprint
     } catch (error) {
-      await this.removeIfPresent(this.activePath)
-      await this.removeCandidateIfPresent(candidatePath)
+      await this.#removeIfPresent(this.activePath)
+      await this.#removeCandidateIfPresent(candidatePath)
       throw error
     }
   }
 
   async rotate(applicationKey, expectedFingerprint) {
+    return this.#coordinateMutation(
+      () => this.#rotateWhileLocked(applicationKey, expectedFingerprint)
+    )
+  }
+
+  async #rotateWhileLocked(applicationKey, expectedFingerprint) {
     const fingerprint = validateCandidateInput(applicationKey, expectedFingerprint)
-    await this.prepare()
-    await this.reconcileBeforeRotation()
+    await this.#prepareWhileLocked()
+    await this.#reconcileBeforeRotation()
     await assertProtectedCredential(this.activePath, this.ownerUid)
 
     if (await pathExists(this.rollbackPath)) {
@@ -206,7 +232,7 @@ export class SystemdCredentialStore {
     try {
       state = await this.rotationState.write(state)
       const candidatePath = this.rotationState.candidatePath(state)
-      await this.sealCandidate(applicationKey, fingerprint, candidatePath)
+      await this.#sealCandidate(applicationKey, fingerprint, candidatePath)
       state = await this.rotationState.write(state, 'installing')
       await rename(this.activePath, this.rollbackPath)
       await syncDirectory(this.directory)
@@ -220,7 +246,7 @@ export class SystemdCredentialStore {
         const currentState = await this.rotationState.read()
 
         if (currentState && ['preparing', 'installing', 'rolling-back'].includes(currentState.phase)) {
-          await this.recoverOriginal(currentState)
+          await this.#recoverOriginal(currentState)
         }
       } catch {
         throw new Error('Credential rotation failed and requires an explicit rollback recovery.')
@@ -231,7 +257,11 @@ export class SystemdCredentialStore {
   }
 
   async commitRotation() {
-    await this.prepare()
+    return this.#coordinateMutation(() => this.#commitRotationWhileLocked())
+  }
+
+  async #commitRotationWhileLocked() {
+    await this.#prepareWhileLocked()
     let state = await this.rotationState.read()
 
     if (!state) {
@@ -248,11 +278,15 @@ export class SystemdCredentialStore {
       state = await this.rotationState.write(state, 'committing')
     }
 
-    await this.finishCommit(state)
+    await this.#finishCommit(state)
   }
 
   async rollbackRotation() {
-    await this.prepare()
+    return this.#coordinateMutation(() => this.#rollbackRotationWhileLocked())
+  }
+
+  async #rollbackRotationWhileLocked() {
+    await this.#prepareWhileLocked()
     const state = await this.rotationState.read()
 
     if (!state) {
@@ -275,11 +309,15 @@ export class SystemdCredentialStore {
       ? await this.rotationState.write(state, 'rolling-back')
       : state
 
-    await this.recoverOriginal(rollbackState)
+    await this.#recoverOriginal(rollbackState)
   }
 
   async revoke(stopService = async () => {}) {
-    await this.prepare()
+    return this.#coordinateMutation(() => this.#revokeWhileLocked(stopService))
+  }
+
+  async #revokeWhileLocked(stopService) {
+    await this.#prepareWhileLocked()
     let stopError
 
     try {
@@ -297,7 +335,7 @@ export class SystemdCredentialStore {
         || filename === `.${credentialName}.install.candidate.cred`
         || encryptedArtifactPattern.test(filename)
       ) {
-        await this.removeIfPresent(target)
+        await this.#removeIfPresent(target)
       }
     }
 
@@ -308,7 +346,7 @@ export class SystemdCredentialStore {
     }
   }
 
-  async reconcileBeforeRotation() {
+  async #reconcileBeforeRotation() {
     const state = await this.rotationState.read()
 
     if (!state) {
@@ -316,19 +354,19 @@ export class SystemdCredentialStore {
     }
 
     if (['preparing', 'installing', 'rolling-back'].includes(state.phase)) {
-      await this.recoverOriginal(state)
+      await this.#recoverOriginal(state)
       return
     }
 
     if (state.phase === 'committing') {
-      await this.finishCommit(state)
+      await this.#finishCommit(state)
       return
     }
 
     throw new Error('A previous encrypted credential is still awaiting commit or rollback.')
   }
 
-  async recoverOriginal(state) {
+  async #recoverOriginal(state) {
     const candidatePath = this.rotationState.candidatePath(state)
     const activeExists = await pathExists(this.activePath)
     const rollbackExists = await pathExists(this.rollbackPath)
@@ -354,22 +392,22 @@ export class SystemdCredentialStore {
 
     await assertProtectedCredential(this.activePath, this.ownerUid)
     await this.validateActive({ path: this.activePath })
-    await this.removeCandidateIfPresent(candidatePath)
+    await this.#removeCandidateIfPresent(candidatePath)
     await this.rotationState.remove()
   }
 
-  async finishCommit(state) {
+  async #finishCommit(state) {
     if (state.phase !== 'committing') {
       throw new Error('Credential rotation state cannot be committed.')
     }
 
     await assertProtectedCredential(this.activePath, this.ownerUid)
-    await this.removeIfPresent(this.rollbackPath)
-    await this.removeCandidateIfPresent(this.rotationState.candidatePath(state))
+    await this.#removeIfPresent(this.rollbackPath)
+    await this.#removeCandidateIfPresent(this.rotationState.candidatePath(state))
     await this.rotationState.remove()
   }
 
-  async sealCandidate(applicationKey, fingerprint, candidatePath) {
+  async #sealCandidate(applicationKey, fingerprint, candidatePath) {
     try {
       await this.run(systemdCredsPath, [
         ...(this.withKey === 'null' ? ['--allow-null'] : []),
@@ -407,12 +445,12 @@ export class SystemdCredentialStore {
 
       return fingerprint
     } catch (error) {
-      await this.removeCandidateIfPresent(candidatePath)
+      await this.#removeCandidateIfPresent(candidatePath)
       throw error
     }
   }
 
-  async removeIfPresent(target) {
+  async #removeIfPresent(target) {
     if (!await pathExists(target)) {
       return
     }
@@ -422,7 +460,7 @@ export class SystemdCredentialStore {
     await syncDirectory(this.directory)
   }
 
-  async removeCandidateIfPresent(target) {
+  async #removeCandidateIfPresent(target) {
     if (!await pathExists(target)) {
       return
     }

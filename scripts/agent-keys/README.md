@@ -54,6 +54,10 @@ prompt, passes it to `systemd-creds` on stdin, verifies the sealed value, and
 publishes it under a root-owned mode-`0700` credential directory as a mode-
 `0600` encrypted file. It verifies the service's effective encrypted-
 credential binding, restarts the service, and requires it to become active.
+Every install, rotation, commit, rollback, and revocation acquires one crash-
+released host coordinator keyed to that credential path before reading or
+changing custody state. A concurrent command waits only within the bounded
+coordinator window and otherwise fails busy without touching files or services.
 
 ## Rotation and rollback
 
@@ -118,4 +122,7 @@ interruption recovery, explicit rollback, commit, revocation, and the
 `$CREDENTIALS_DIRECTORY/agora-agent-key` read boundary. The facility uses
 systemd's null test key so it does not create or depend on a production host
 credential secret; the production CLI has no null-key option and always seals
-with `--with-key=host`.
+with `--with-key=host`. The unit suite also forces overlapping rotations with
+the same pending replacement and proves the second caller cannot enter the
+custody state machine before the first settles or displace the original
+rollback ciphertext.
