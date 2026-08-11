@@ -6,7 +6,11 @@ import {
   createGroupSecurityFixture,
   type GroupSecurityFixture
 } from './groupFixture'
-import { createAdminClient, createAnonymousClient } from './localSupabase'
+import { createHumanFixture, deleteHumanFixtures } from './humanFixture'
+import {
+  createAdminClient,
+  createAnonymousClient
+} from './localSupabase'
 
 type IdRow = { id: string }
 
@@ -174,6 +178,45 @@ describe('group-domain security', () => {
     await expectRowsMissing('invitations', 'id', wrongInviterId)
     await expectRowsMissing('invitations', 'id', blankEmailId)
     await expectRowsMissing('invitations', 'id', activeMemberEmailId)
+  })
+
+  it('consumes a pending invitation when its human invitee becomes an active member', async () => {
+    const source = requireFixture()
+    const human = await createHumanFixture('accepted-invitee')
+    const invitationId = randomUUID()
+    const membershipId = randomUUID()
+
+    try {
+      const invitationResult = await admin.from('invitations').insert({
+        email: human.email,
+        group_id: source.groups.visible,
+        id: invitationId,
+        invited_by_principal_id: source.humans.owner.principalId
+      })
+      const membershipResult = await admin.from('memberships').insert({
+        group_id: source.groups.visible,
+        id: membershipId,
+        principal_id: human.principalId,
+        role: 'member'
+      })
+
+      expect(invitationResult.error).toBeNull()
+      expect(membershipResult.error).toBeNull()
+      await expectRowsMissing('invitations', 'id', invitationId)
+      await expect(Promise.all([
+        selectIds(human.client, 'groups'),
+        selectIds(human.client, 'memberships'),
+        selectIds(human.client, 'invitations')
+      ])).resolves.toEqual([
+        [source.groups.visible],
+        expect.arrayContaining([membershipId]),
+        []
+      ])
+    } finally {
+      await admin.from('memberships').delete().eq('id', membershipId)
+      await admin.from('invitations').delete().eq('id', invitationId)
+      await deleteHumanFixtures([human])
+    }
   })
 
   it('lets active members read only their group and membership directory', async () => {

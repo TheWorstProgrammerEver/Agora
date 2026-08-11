@@ -83,18 +83,22 @@ language plpgsql
 security definer
 set search_path = ''
 as $$
+declare
+  owner_kind public.principal_kind;
 begin
   if tg_op = 'UPDATE' and new.owner_principal_id is distinct from old.owner_principal_id then
     raise exception 'Group ownership cannot be transferred in v1.'
       using errcode = 'check_violation';
   end if;
 
-  if not exists (
-    select 1
-    from public.principals
-    where id = new.owner_principal_id
-      and kind = 'human'::public.principal_kind
-  ) then
+  -- Principal identity updates already hold a conflicting row lock.
+  select kind
+  into owner_kind
+  from public.principals
+  where id = new.owner_principal_id
+  for share;
+
+  if owner_kind is distinct from 'human'::public.principal_kind then
     raise exception 'A group owner must be a human principal.'
       using errcode = 'check_violation';
   end if;
@@ -125,7 +129,7 @@ create trigger create_group_owner_membership_after_insert
 after insert on public.groups
 for each row execute function public.create_group_owner_membership();
 
-create function public.enforce_membership_role()
+create function public.prepare_group_membership()
 returns trigger
 language plpgsql
 security definer
@@ -133,11 +137,14 @@ set search_path = ''
 as $$
 declare
   group_owner_principal_id uuid;
+  member_email text;
 begin
+  -- Memberships take the same group lock before consuming an invitation.
   select owner_principal_id
   into group_owner_principal_id
   from public.groups
-  where id = new.group_id;
+  where id = new.group_id
+  for update;
 
   if group_owner_principal_id is null then
     raise exception 'A membership must reference an existing group.'
@@ -153,13 +160,29 @@ begin
       using errcode = 'check_violation';
   end if;
 
+  if new.role = 'member'::public.membership_role then
+    select lower(trim(users.email))
+    into member_email
+    from public.principals
+    join auth.users
+      on users.id = principals.auth_user_id
+    where principals.id = new.principal_id
+      and principals.kind = 'human'::public.principal_kind;
+
+    if member_email is not null then
+      delete from public.invitations
+      where group_id = new.group_id
+        and email = member_email;
+    end if;
+  end if;
+
   return new;
 end;
 $$;
 
-create trigger enforce_membership_role_before_write
+create trigger prepare_group_membership_before_write
 before insert or update on public.memberships
-for each row execute function public.enforce_membership_role();
+for each row execute function public.prepare_group_membership();
 
 create function public.protect_group_owner_membership()
 returns trigger
@@ -195,10 +218,12 @@ declare
   target_group_name text;
   target_owner_principal_id uuid;
 begin
+  -- Invitations take the same group lock before checking active membership.
   select name, owner_principal_id
   into target_group_name, target_owner_principal_id
   from public.groups
-  where id = new.group_id;
+  where id = new.group_id
+  for update;
 
   if target_owner_principal_id is null then
     raise exception 'An invitation must reference an existing group.'
@@ -320,7 +345,7 @@ revoke all on table public.invitations from anon, authenticated;
 revoke execute on function public.enforce_human_group_owner() from public, anon, authenticated;
 revoke execute on function public.protect_human_group_owner_principal() from public, anon, authenticated;
 revoke execute on function public.create_group_owner_membership() from public, anon, authenticated;
-revoke execute on function public.enforce_membership_role() from public, anon, authenticated;
+revoke execute on function public.prepare_group_membership() from public, anon, authenticated;
 revoke execute on function public.protect_group_owner_membership() from public, anon, authenticated;
 revoke execute on function public.prepare_group_invitation() from public, anon, authenticated;
 revoke execute on function public.current_human_principal_id() from public, anon, authenticated;

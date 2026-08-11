@@ -1,22 +1,35 @@
 import { execFileSync } from 'node:child_process'
 import { createClient } from '@supabase/supabase-js'
+import { Client } from 'pg'
 
 type SupabaseStatus = {
   ANON_KEY?: string
   API_URL?: string
+  DB_URL?: string
   PUBLISHABLE_KEY?: string
   SERVICE_ROLE_KEY?: string
 }
 
-const getLocalOrigin = (value: string) => {
+const loopbackHosts = new Set(['127.0.0.1', '[::1]', 'localhost'])
+
+const getLocalApiOrigin = (value: string) => {
   const url = new URL(value)
-  const loopbackHosts = new Set(['127.0.0.1', '[::1]', 'localhost'])
 
   if (url.protocol !== 'http:' || !loopbackHosts.has(url.hostname)) {
     throw new Error('Security integration tests require a local HTTP loopback Supabase URL.')
   }
 
   return url.origin
+}
+
+const getLocalDatabaseUrl = (value: string) => {
+  const url = new URL(value)
+
+  if (!['postgres:', 'postgresql:'].includes(url.protocol) || !loopbackHosts.has(url.hostname)) {
+    throw new Error('Security integration tests require a local loopback Postgres URL.')
+  }
+
+  return url.toString()
 }
 
 const getLocalSupabaseConfig = () => {
@@ -34,14 +47,15 @@ const getLocalSupabaseConfig = () => {
   const status = JSON.parse(output.slice(jsonStart)) as SupabaseStatus
   const publishableKey = status.PUBLISHABLE_KEY ?? status.ANON_KEY
 
-  if (!status.API_URL || !publishableKey || !status.SERVICE_ROLE_KEY) {
+  if (!status.API_URL || !status.DB_URL || !publishableKey || !status.SERVICE_ROLE_KEY) {
     throw new Error('Local Supabase status did not provide the required test configuration.')
   }
 
   return {
+    databaseUrl: getLocalDatabaseUrl(status.DB_URL),
     publishableKey,
     serviceRoleKey: status.SERVICE_ROLE_KEY,
-    url: getLocalOrigin(status.API_URL)
+    url: getLocalApiOrigin(status.API_URL)
   }
 }
 
@@ -65,3 +79,8 @@ export const createAdminClient = () => createClient(
   config.serviceRoleKey,
   clientOptions
 )
+
+export const createDatabaseClient = (applicationName: string) => new Client({
+  application_name: applicationName,
+  connectionString: config.databaseUrl
+})
