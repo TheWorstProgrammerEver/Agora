@@ -1,0 +1,33 @@
+.screen {
+  display: grid;
+  align-content: start;
+  gap: 1rem;
+  max-width: 58rem;
+}
+
+.header {
+  display: grid;
+  gap: 0.35rem;
+
+  h2,
+  p {
+    margin: 0;
+  }
+
+  h2 {
+    font-size: clamp(2rem, 6vw, 3.75rem);
+    line-height: 1;
+  }
+
+  p {
+    color: var(--color-muted);
+    font-size: 0.85rem;
+    font-weight: 800;
+  }
+}
+
+.copy {
+  max-width: 42rem;
+  margin: 0;
+  color: var(--color-muted);
+}

@@ -1,0 +1,23 @@
+@use "../styles/breakpoints";
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.title {
+  min-width: 0;
+}
+
+.actions {
+  flex: 0 0 auto;
+  --action-group-gap: 0.65rem;
+}
+
+@media (max-width: breakpoints.$compact) {
+  .header {
+    gap: 0.65rem;
+  }
+}

@@ -1,0 +1,6 @@
+.screen {
+  min-height: 100svh;
+  padding: clamp(1rem, 4vw, 2rem);
+  background: var(--color-page);
+  color: var(--color-text);
+}
