@@ -1,12 +1,14 @@
 import {
   getDefaultAuthenticationType,
   getEnabledAuthenticationTypes,
+  type AuthenticationCapabilities,
   type SupportedAuthenticationTypes
 } from '../../lib/auth/authenticationTypes'
 
 export {
   getDefaultAuthenticationType,
   getEnabledAuthenticationTypes,
+  type AuthenticationCapabilities,
   type AuthenticationType,
   type SupportedAuthenticationTypes
 } from '../../lib/auth/authenticationTypes'
@@ -18,18 +20,26 @@ const defaultSupportedAuthenticationTypes: SupportedAuthenticationTypes = {
   passkey: false
 }
 
-export const getSupportedAuthenticationTypes = (): SupportedAuthenticationTypes => {
-  const configured = typeof window === 'undefined'
-    ? undefined
-    : window.config?.auth?.supportedTypes
-  const supportedTypes = {
-    ...defaultSupportedAuthenticationTypes,
-    ...configured
+export const getAuthenticationCapabilities = (): AuthenticationCapabilities => {
+  const configured = typeof window === 'undefined' ? undefined : window.config?.auth
+
+  return {
+    publicSignup: configured?.publicSignup ?? true,
+    supportedTypes: {
+      ...defaultSupportedAuthenticationTypes,
+      ...configured?.supportedTypes
+    }
+  }
+}
+
+export const getSupportedAuthenticationTypes = () => getAuthenticationCapabilities().supportedTypes
+
+export const getAuthenticationErrorMessage = (error: unknown) => {
+  const code = typeof error === 'object' && error && 'code' in error ? error.code : undefined
+
+  if (code === 'signup_disabled') {
+    return 'Account creation is disabled.'
   }
 
-  if (getEnabledAuthenticationTypes(supportedTypes).length > 0) {
-    return supportedTypes
-  }
-
-  return defaultSupportedAuthenticationTypes
+  return error instanceof Error ? error.message : 'Something went wrong with authentication.'
 }

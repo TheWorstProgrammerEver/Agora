@@ -4,6 +4,7 @@ interface Window {
   config?: {
     appName?: string
     auth?: {
+      publicSignup?: boolean
       supportedTypes?: {
         emailPassword?: boolean
         magicLink?: boolean

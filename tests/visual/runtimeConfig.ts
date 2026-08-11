@@ -5,6 +5,7 @@ import type { SupportedAuthenticationTypes } from '../../src/domain/auth'
 const testConfig = JSON.parse(readFileSync('tests/visual/config.test.json', 'utf8'))
 
 type RuntimeConfigOverride = {
+  publicSignup?: boolean
   supportedTypes?: SupportedAuthenticationTypes
 }
 
@@ -13,6 +14,7 @@ export const routeRuntimeConfig = async (page: Page, override: RuntimeConfigOver
     ...testConfig,
     auth: {
       ...testConfig.auth,
+      publicSignup: override.publicSignup ?? testConfig.auth.publicSignup,
       supportedTypes: override.supportedTypes ?? testConfig.auth.supportedTypes
     }
   }

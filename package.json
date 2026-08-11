@@ -17,6 +17,7 @@
     "lint": "tsc -b",
     "test": "vitest run",
     "test:security": "vitest run --config vitest.security.config.ts",
+    "test:security:signup-disabled": "AGORA_EXPECT_SIGNUP_DISABLED=true vitest run --config vitest.security.config.ts tests/integration/security/signupDisabledSecurity.test.ts",
     "test:visual": "playwright test",
     "supabase:start": "supabase start",
     "supabase:stop": "supabase stop",

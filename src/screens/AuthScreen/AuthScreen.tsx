@@ -41,6 +41,7 @@ export const AuthScreen = () => {
         onPasskeySignIn={viewModel.signInWithPasskey}
         onSignIn={viewModel.signIn}
         onStatusClear={viewModel.clearAuthStatus}
+        publicSignup={viewModel.publicSignup}
         supportedTypes={viewModel.supportedTypes}
       />
     </main>

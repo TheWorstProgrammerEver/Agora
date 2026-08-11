@@ -2,6 +2,11 @@ export type AuthenticationType = 'emailPassword' | 'magicLink' | 'otp' | 'passke
 
 export type SupportedAuthenticationTypes = Record<AuthenticationType, boolean>
 
+export type AuthenticationCapabilities = {
+  publicSignup: boolean
+  supportedTypes: SupportedAuthenticationTypes
+}
+
 const authenticationTypeOrder: AuthenticationType[] = ['emailPassword', 'passkey', 'otp', 'magicLink']
 
 export const getEnabledAuthenticationTypes = (supportedTypes: SupportedAuthenticationTypes) => (

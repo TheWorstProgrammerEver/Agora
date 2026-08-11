@@ -18,6 +18,7 @@ Set these Netlify environment variables for production:
 | --- | --- | --- |
 | `BUILD_VERSION` | `<git-sha-or-release>` | Display/debug version. |
 | `ENVIRONMENT` | `production` | Runtime environment label. |
+| `AUTH_PUBLIC_SIGNUP_ENABLED` | `true` | JSON boolean controlling whether the browser offers account creation. Backend Auth settings remain authoritative. |
 | `AUTH_EMAIL_PASSWORD_ENABLED` | `true` | JSON boolean, not a quoted string. |
 | `AUTH_PASSKEY_ENABLED` | `true` | JSON boolean. Disable if hosted WebAuthn is not configured. |
 | `AUTH_OTP_ENABLED` | `true` | JSON boolean. |
@@ -43,7 +44,8 @@ Configure these in the hosted Supabase dashboard for the production project. The
 
 - Site URL: `https://<production-domain>`.
 - Redirect URLs: include exact production callback and app URLs, for example `https://<production-domain>/**` only if wildcard redirects are intentionally accepted.
-- Email/password: match the product decision for confirmations, password requirements, signup availability, and SMTP sender settings.
+- Public signup: set both the project-wide and email-provider signup settings to the intended backend value. Set `AUTH_PUBLIC_SIGNUP_ENABLED` to the same value so a disabled deployment does not advertise account creation. The backend settings are authoritative and must reject direct signup attempts when disabled.
+- Email/password: match the product decision for confirmations, password requirements, and SMTP sender settings.
 - OTP or magic link: enable only when the UI exposes it; configure email templates, sender identity, rate limits, and provider settings.
 - Passkeys/WebAuthn, when enabled:
   - RP ID: `<production-domain-without-scheme>`.
@@ -70,12 +72,9 @@ After deployment, invoke each function once and inspect hosted function logs for
 
 ## Database
 
-This auth starter has no product tables or RLS migrations yet. When the first persisted feature lands:
+The base migration creates `public.principals`, the `human` and `agent` principal kinds, and an Auth trigger that provisions exactly one human principal for every new `auth.users` row. Human sessions can select only their own principal; browser roles cannot insert, update, delete, or cross-read principal rows. Agent-row provisioning and agent credential storage are intentionally absent.
 
-- Add SQL migrations under `supabase/migrations`.
-- Apply them to production with `supabase db push`, a reviewed migration pipeline, or the team's hosted Supabase deployment workflow.
-- Add RLS policies and security tests for direct publishable-key table access and function-mediated access.
-- Document any required seed data or one-time backfills here.
+Apply migrations to production with `supabase db push`, a reviewed migration pipeline, or the selected hosted Supabase deployment workflow before enabling public signup. This ordering is required because the Auth trigger is the only human-principal provisioning path.
 
 ## Production Smoke Checks
 
@@ -83,7 +82,8 @@ Run these after every production deploy:
 
 - Open the production app and confirm the browser successfully loads `/config.js` and `/config.json`.
 - Confirm the browser config object contains the production `SUPABASE_URL`, expected auth flags, and no unresolved `#{...}#` tokens.
-- Sign in and sign out through the supported auth methods.
+- Create a public human account, confirm its principal-backed profile loads, then sign out and back in through every enabled auth method.
+- With backend signup disabled in a staging validation, confirm a direct signup request is rejected and the browser reports account creation as disabled without authenticating. Restore the intended deployment setting afterward.
 - For auth callbacks, confirm the hosted app returns to the expected route without a redirect allow-list error.
 - Visit a deep SPA route directly and confirm Netlify serves `index.html` through `public/_redirects`.
 - Invoke `https://<project-ref>.supabase.co/functions/v1/app-health` and confirm it returns the documented foundation readiness response. Do not treat it as the later database-backed operational `/health` contract.

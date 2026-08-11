@@ -13,6 +13,7 @@ import {
   verifyOneTimePassword
 } from '../data/supabaseAuthRepository'
 import { useLoader } from '../../lib/hooks/useLoader'
+import { getAuthenticationCapabilities, getAuthenticationErrorMessage } from '../domain/auth'
 import type { Account } from '../types/auth'
 
 export type AppAuth = {
@@ -22,24 +23,23 @@ export type AppAuth = {
   authReady: boolean
   clearAuthStatus: () => void
   currentAccount?: Account
-  requestOtp: (email: string, name: string) => Promise<void>
-  sendMagicLink: (email: string, name: string) => Promise<void>
+  publicSignup: boolean
+  requestOtp: (email: string, name: string, shouldCreateUser?: boolean) => Promise<void>
+  sendMagicLink: (email: string, name: string, shouldCreateUser?: boolean) => Promise<void>
   signIn: (email: string, password: string) => Promise<void>
   signInWithPasskey: () => Promise<void>
   signOut: () => Promise<void>
   signUp: (email: string, name: string, password: string) => Promise<void>
+  supportedTypes: ReturnType<typeof getAuthenticationCapabilities>['supportedTypes']
   verifyOtp: (email: string, name: string, token: string) => Promise<void>
 }
 
-const errorMessage = (error: unknown) => (
-  error instanceof Error ? error.message : 'Something went wrong with authentication.'
-)
-
 export const useAppAuth = (): AppAuth => {
+  const capabilities = useMemo(getAuthenticationCapabilities, [])
   const [authNotice, setAuthNotice] = useState<string>()
   const [authReady, setAuthReady] = useState(false)
   const [currentAccount, setCurrentAccount] = useState<Account>()
-  const authLoader = useLoader({ getErrorMessage: errorMessage })
+  const authLoader = useLoader({ getErrorMessage: getAuthenticationErrorMessage })
   const {
     busy: authBusy,
     clearError: clearAuthError,
@@ -68,7 +68,7 @@ export const useAppAuth = (): AppAuth => {
         }
       } catch (error) {
         if (active) {
-          setAuthError(errorMessage(error))
+          setAuthError(getAuthenticationErrorMessage(error))
           setCurrentAccount(undefined)
         }
       } finally {
@@ -82,7 +82,7 @@ export const useAppAuth = (): AppAuth => {
       .then((session) => applySession(session))
       .catch((error) => {
         if (active) {
-          setAuthError(errorMessage(error))
+          setAuthError(getAuthenticationErrorMessage(error))
           setCurrentAccount(undefined)
           setAuthReady(true)
         }
@@ -117,6 +117,12 @@ export const useAppAuth = (): AppAuth => {
     }
   }, [executeAuthAction])
 
+  const requirePublicSignup = useCallback(() => {
+    if (!capabilities.publicSignup) {
+      throw Object.assign(new Error('Account creation is disabled.'), { code: 'signup_disabled' })
+    }
+  }, [capabilities.publicSignup])
+
   const signIn = useCallback((email: string, password: string) => (
     runAuthAction(
       () => signInWithPassword({ email, password }),
@@ -133,22 +139,36 @@ export const useAppAuth = (): AppAuth => {
 
   const signUp = useCallback((email: string, name: string, password: string) => (
     runAuthAction(
-      () => signUpWithPassword({ email, name, password }),
+      () => {
+        requirePublicSignup()
+
+        return signUpWithPassword({ email, name, password })
+      },
       (account) => {
-        setCurrentAccount(account)
-        setAuthNotice('Account created.')
+        if (account) {
+          setCurrentAccount(account)
+          setAuthNotice('Account created.')
+        } else {
+          setAuthNotice('Check your email to finish creating your account.')
+        }
       }
     )
-  ), [runAuthAction])
+  ), [requirePublicSignup, runAuthAction])
 
-  const requestOtp = useCallback((email: string, name: string) => (
+  const requestOtp = useCallback((email: string, name: string, shouldCreateUser = false) => (
     runAuthAction(
-      () => requestOneTimePassword({ email, name }),
+      () => {
+        if (shouldCreateUser) {
+          requirePublicSignup()
+        }
+
+        return requestOneTimePassword({ email, name, shouldCreateUser })
+      },
       () => {
         setAuthNotice('Check your email for the one-time code.')
       }
     )
-  ), [runAuthAction])
+  ), [requirePublicSignup, runAuthAction])
 
   const verifyOtp = useCallback((email: string, name: string, token: string) => (
     runAuthAction(
@@ -157,14 +177,20 @@ export const useAppAuth = (): AppAuth => {
     )
   ), [runAuthAction])
 
-  const sendMagicLinkToEmail = useCallback((email: string, name: string) => (
+  const sendMagicLinkToEmail = useCallback((email: string, name: string, shouldCreateUser = false) => (
     runAuthAction(
-      () => sendMagicLink({ email, name }),
+      () => {
+        if (shouldCreateUser) {
+          requirePublicSignup()
+        }
+
+        return sendMagicLink({ email, name, shouldCreateUser })
+      },
       () => {
         setAuthNotice('Check your email for the magic link.')
       }
     )
-  ), [runAuthAction])
+  ), [requirePublicSignup, runAuthAction])
 
   const signOut = useCallback(() => (
     runAuthAction(
@@ -182,13 +208,15 @@ export const useAppAuth = (): AppAuth => {
     authReady,
     clearAuthStatus,
     currentAccount,
+    publicSignup: capabilities.publicSignup,
     requestOtp,
     sendMagicLink: sendMagicLinkToEmail,
     signIn,
     signInWithPasskey: signInWithRegisteredPasskey,
     signOut,
     signUp,
-    verifyOtp
+    verifyOtp,
+    supportedTypes: capabilities.supportedTypes
   }), [
     authBusy,
     authError,
@@ -196,6 +224,7 @@ export const useAppAuth = (): AppAuth => {
     authReady,
     clearAuthStatus,
     currentAccount,
+    capabilities,
     requestOtp,
     sendMagicLinkToEmail,
     signIn,
