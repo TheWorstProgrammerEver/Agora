@@ -32,7 +32,7 @@ The read-only preflight checks Docker daemon access and launches headless Playwr
 
 Press `Ctrl+C` to stop dev processes started by the script. Supabase containers keep their local data in Docker volumes; use `npm run all-done` when you want everything wound down. Lifecycle state transitions are serialized by a short-lived kernel-owned loopback coordinator, so concurrent stale recovery or delayed release cannot remove a replacement owner. Shutdown uses ignored repo-local runtime identity rather than shared-port or process-name matching, verifies the complete managed process groups before success, removes stale or unowned state without signaling its referenced process, and exits nonzero if a live owner is ambiguous or an endpoint remains live.
 
-Do not treat `health` alone as proof that the current branch is ready. `get-going` checks both configured routes, including the fail-closed `agora` foundation route. If health is ready but another function route is `404`, or a business route returns `503` after adding shared imports, restart the local stack with `npm run all-done` and `npm run get-going` before running security tests. If Edge Runtime is healthy but Kong reports name-resolution failures, restarting the local Kong container for this Supabase project may be enough.
+Do not treat `health` alone as proof that the current branch is ready. `get-going` checks both configured routes, including the authenticated, fail-closed `agora` route. If health is ready but another function route is `404`, or a business route returns `503` after adding shared imports, restart the local stack with `npm run all-done` and `npm run get-going` before running security tests. If Edge Runtime is healthy but Kong reports name-resolution failures, restarting the local Kong container for this Supabase project may be enough.
 
 ## Operational Health
 
@@ -51,7 +51,7 @@ deployment variables, timeout bounds, and monitor retry guidance.
 
 `common` owns the versioned Agora request identifiers, request/response DTOs, and typed envelope. `src/data/agora` maps those contracts to the browser-side Supabase function invoker. `supabase/functions/agora` imports the same contract and the shared `lib/dispatch` implementation.
 
-The `agora` route is deliberately unavailable in this foundation: every recognized request returns `501` because its handler registry is empty. This prevents the scaffold from introducing chat behavior or an unauthenticated business path before the canonical dual-auth boundary is implemented.
+The `agora` route explicitly validates either a human Supabase session or one opaque Agora agent application key with the platform JWT gate disabled. Both adapters produce the same server-derived `PrincipalContext` and an RLS-only RPC capability before the versioned envelope, strict request DTO, and typed handler catalog run. Recognized requests whose owning delivery slice has not landed return `501`; anonymous and invalid credentials fail before request parsing or handler dispatch.
 
 ## Runtime Config
 
@@ -68,7 +68,7 @@ Deployment and hosted environment setup lives in `README.ENV.md`. Keep that file
 
 ## Security Integration Tests
 
-The security integration command verifies the anonymous database-backed health contract, public signup and server-controlled human-principal provisioning, direct-table RLS/grants, duplicate and forged-row denial, principal-kind constraints, memberless cross-user isolation, and the fail-closed foundation function:
+The security integration command verifies the anonymous database-backed health contract, public signup and server-controlled human-principal provisioning, direct-table RLS/grants, duplicate and forged-row denial, principal-kind constraints, memberless cross-user isolation, and the dual-auth dispatcher boundary:
 
 ```sh
 npm run get-going

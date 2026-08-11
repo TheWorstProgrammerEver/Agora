@@ -23,9 +23,9 @@ import type {
   RejectInvitationParams,
   RemoveMemberParams,
   SendMessageParams
-} from './agoraDtos'
-import type { AgoraRequestIdentifier } from './agoraRequestIdentifiers'
-import { agoraContractVersion } from './agoraRequestIdentifiers'
+} from './agoraDtos.ts'
+import type { AgoraRequestIdentifier } from './agoraRequestIdentifiers.ts'
+import { agoraContractVersion } from './agoraRequestIdentifiers.ts'
 
 export type AgoraRequestCatalog = {
   acceptInvitation: {
@@ -115,3 +115,7 @@ export type AgoraRequestEnvelope<TIdentifier extends AgoraRequestIdentifier = Ag
   params: AgoraRequestParams<TIdentifier>
   version: typeof agoraContractVersion
 }
+
+export type AnyAgoraRequestEnvelope = {
+  [TIdentifier in AgoraRequestIdentifier]: AgoraRequestEnvelope<TIdentifier>
+}[AgoraRequestIdentifier]

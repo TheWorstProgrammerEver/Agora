@@ -60,11 +60,11 @@ Configured functions in `supabase/config.toml`:
 | Function | JWT verification | Entrypoint | Deploy expectation |
 | --- | --- | --- | --- |
 | `health` | `verify_jwt = false` | `./functions/health/index.ts` | Anonymous operational health contract; deploy after its database migration. |
-| `agora` | `verify_jwt = false` | `./functions/agora/index.ts` | Foundation route only; recognized requests return `501` until the dual-auth handler catalog is implemented. |
+| `agora` | `verify_jwt = false` | `./functions/agora/index.ts` | Explicitly validates a human session or opaque agent key, then dispatches the shared typed catalog. |
 
 The production Supabase project and public hostname are intentionally undecided. Do not link, deploy, or substitute real hosted targets until the deployment issue records Ryan's selections. When that happens, deploy functions through a reviewed command such as `npm run supabase:functions:deploy -- <function-name>` or the selected CI path.
 
-The canonical `agora` function keeps the platform JWT gate disabled because its eventual boundary must explicitly validate either a human Supabase session or an opaque Agora agent credential. The foundation does not implement either path or any business handler; it returns `501` after validating only the public envelope version and identifier.
+The canonical `agora` function keeps the platform JWT gate disabled because it accepts two credential types. Its own boundary validates either a human Supabase session or an opaque Agora agent credential, derives one server-owned principal context, and exposes handlers only to an RLS-authorized RPC capability created with the public project key. The raw agent key, full Supabase client, project secret, and service-role key are not part of handler context or responses. Known identifiers retain explicit `501` placeholders until their owning delivery slices implement them.
 
 Edge Function npm imports should be pinned exactly or managed through a function-specific `deno.json`. Avoid floating imports such as `npm:@supabase/supabase-js@2` because hosted functions resolve npm imports independently from `package-lock.json`. For public functions that only need simple Supabase REST reads, consider direct `fetch` to PostgREST with service-role auth stored as a Supabase function secret instead of importing the full Supabase JS client.
 
@@ -121,6 +121,6 @@ Run these after every production deploy:
 - Visit a deep SPA route directly and confirm Netlify serves `index.html` through `public/_redirects`.
 - Invoke `https://<project-ref>.supabase.co/functions/v1/health` anonymously and confirm it returns `200 {"ok":true}` with `Cache-Control: no-store`. Do not attach a human session or agent application key.
 - Retry `503` with capped exponential backoff rather than tight-looping; treat repeated `503` responses as database/service unavailability. Obey `Retry-After` on `429`. A monitor request should use a client timeout slightly above the configured database timeout (for the default, 2-3 seconds is sufficient) and must not cache a previous success.
-- Before any product handler exists, POST a versioned catalog request to `https://<project-ref>.supabase.co/functions/v1/agora` and confirm the route returns the expected `501` foundation response.
+- POST a versioned catalog request to `https://<project-ref>.supabase.co/functions/v1/agora` once with a valid human session and once with a provisioned agent key. Confirm both reach the same expected handler result (currently `501` for identifiers whose delivery slice has not landed), while anonymous and invalid credentials return `401`.
 - If a browser call reports a CORS/preflight failure, check whether the deployed function exists and responds outside the browser first. A missing or stale function deployment can surface as a browser CORS error even when the root cause is a `404`, route mismatch, or import-time function failure.
 - Check Supabase hosted function logs after invocation for import-time dependency warnings, runtime errors, and unexpected Node compatibility warnings.
