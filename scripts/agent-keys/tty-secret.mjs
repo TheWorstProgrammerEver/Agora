@@ -9,27 +9,48 @@ export const readSecretFromTty = ({
   }
 
   const chunks = []
-  const finish = (error) => {
-    input.off('data', onData)
-    input.setRawMode(false)
-    input.pause()
-    output.write('\n')
+  const initialRawMode = Boolean(input.isRaw)
+  let settled = false
 
-    if (error) {
-      for (const chunk of chunks) {
-        chunk.fill(0)
-      }
-      reject(error)
+  const clearChunks = () => {
+    for (const chunk of chunks) {
+      chunk.fill(0)
+    }
+  }
+
+  const finish = (error) => {
+    if (settled) {
+      return
+    }
+
+    settled = true
+    input.off('data', onData)
+    input.off('end', onEnd)
+    input.off('error', onError)
+    let cleanupFailed = false
+
+    try {
+      input.setRawMode(initialRawMode)
+      input.pause()
+      output.write('\n')
+    } catch {
+      cleanupFailed = true
+    }
+
+    if (error || cleanupFailed) {
+      clearChunks()
+      reject(cleanupFailed
+        ? new Error('Agora agent key TTY state could not be restored.')
+        : error)
       return
     }
 
     const secret = Buffer.concat(chunks)
-
-    for (const chunk of chunks) {
-      chunk.fill(0)
-    }
+    clearChunks()
     resolve(secret)
   }
+  const onEnd = () => finish(new Error('Agora agent key entry ended unexpectedly.'))
+  const onError = () => finish(new Error('Agora agent key entry failed.'))
   const onData = (chunk) => {
     for (const byte of chunk) {
       if (byte === 3) {
@@ -56,8 +77,14 @@ export const readSecretFromTty = ({
     }
   }
 
-  output.write(prompt)
-  input.setRawMode(true)
-  input.resume()
-  input.on('data', onData)
+  try {
+    input.setRawMode(true)
+    input.resume()
+    input.on('data', onData)
+    input.once('end', onEnd)
+    input.once('error', onError)
+    output.write(prompt)
+  } catch {
+    finish(new Error('Agora agent key TTY could not be initialized.'))
+  }
 })

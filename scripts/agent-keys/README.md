@@ -107,11 +107,15 @@ understood. RYA-320 owns production delivery, validation, and evidence.
 
 ## Local custody validation
 
-Run `npm run test:systemd-credential` on a systemd host with passwordless test
-sudo. The live test uses an isolated root-owned directory under `/run`, invokes
-real `systemd-creds` and `systemd-run`, and proves install, replacement
-validation, automatic rollback, explicit rollback, commit, revocation, and the
-`$CREDENTIALS_DIRECTORY/agora-agent-key` read boundary. It deliberately uses
+Run `npm run test:systemd-credential` as the invoking operator on a systemd host
+with passwordless test sudo. The test first runs the exact production launcher
+with a minimal environment and real PTYs, proving redirected-input denial,
+no-echo entry, cancellation, terminal restoration, and raw-key exclusion from
+arguments and output. It then elevates the approved absolute Node runtime and
+uses an isolated root-owned directory under `/run`, real `systemd-creds`, and
+real `systemd-run` to prove install, replacement validation, automatic and
+interruption recovery, explicit rollback, commit, revocation, and the
+`$CREDENTIALS_DIRECTORY/agora-agent-key` read boundary. The facility uses
 systemd's null test key so it does not create or depend on a production host
 credential secret; the production CLI has no null-key option and always seals
 with `--with-key=host`.
