@@ -3,6 +3,10 @@ import {
   agoraRequestIdentifiers,
   type AgoraRequestIdentifier
 } from './agoraRequestIdentifiers.ts'
+import {
+  maximumGroupListPageSize,
+  maximumGroupNameLength
+} from './agoraGroupLimits.ts'
 
 type ParamsValidator = (value: unknown) => boolean
 
@@ -41,6 +45,15 @@ const isCursorPage = (value: unknown) => (
   && (value.limit === undefined || isPositiveInteger(value.limit))
 )
 
+const isGroupListPage = (value: unknown) => (
+  isObject(value)
+  && hasExactKeys(value, [], ['cursor', 'limit'])
+  && (value.cursor === undefined || isNonEmptyString(value.cursor))
+  && (value.limit === undefined || (
+    isPositiveInteger(value.limit) && value.limit <= maximumGroupListPageSize
+  ))
+)
+
 const isGroupIdParams = (value: unknown) => (
   isObject(value)
   && hasExactKeys(value, ['groupId'])
@@ -65,6 +78,7 @@ const validators = {
     isObject(value)
     && hasExactKeys(value, ['name'])
     && isNonEmptyString(value.name)
+    && value.name.trim().length <= maximumGroupNameLength
   ),
   [agoraRequestIdentifiers.createRealtimeSession]: (value) => (
     isObject(value)
@@ -114,7 +128,7 @@ const validators = {
     && (value.cursor === undefined || isNonEmptyString(value.cursor))
     && (value.limit === undefined || isPositiveInteger(value.limit))
   ),
-  [agoraRequestIdentifiers.listGroups]: isCursorPage,
+  [agoraRequestIdentifiers.listGroups]: isGroupListPage,
   [agoraRequestIdentifiers.listPendingInvitations]: isCursorPage,
   [agoraRequestIdentifiers.markGroupRead]: (value) => (
     isObject(value)
