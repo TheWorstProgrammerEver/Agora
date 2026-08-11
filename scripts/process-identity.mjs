@@ -60,7 +60,7 @@ const readLinuxProcessIdentity = (pid) => {
   }
 }
 
-const parseDarwinProcessLine = (source) => {
+export const parseDarwinProcessLine = (source) => {
   const match = source.match(/^\s*(\d+)\s+(\d+)\s+(\S+)\s+(\S+\s+\S+\s+\d+\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+(.+)$/)
 
   if (!match) {

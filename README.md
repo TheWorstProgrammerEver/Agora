@@ -29,7 +29,7 @@ The read-only preflight checks Docker daemon access and launches headless Playwr
 
 `get-going` installs npm dependencies when needed, opens and waits for Docker Desktop on macOS, starts the local Supabase stack, starts local Edge Functions, validates each enabled function route from `supabase/config.toml`, starts Vite on LAN, writes ignored local developer config to `public/config.local.json`, verifies reachable ports, and prints the localhost and LAN endpoint sheet.
 
-Press `Ctrl+C` to stop dev processes started by the script. Supabase containers keep their local data in Docker volumes; use `npm run all-done` when you want everything wound down. Shutdown uses ignored repo-local runtime identity rather than shared-port or process-name matching, verifies the complete managed process groups before success, removes stale or unowned state without signaling its referenced process, and exits nonzero if a live owner is ambiguous or an endpoint remains live.
+Press `Ctrl+C` to stop dev processes started by the script. Supabase containers keep their local data in Docker volumes; use `npm run all-done` when you want everything wound down. Lifecycle state transitions are serialized by a short-lived kernel-owned loopback coordinator, so concurrent stale recovery or delayed release cannot remove a replacement owner. Shutdown uses ignored repo-local runtime identity rather than shared-port or process-name matching, verifies the complete managed process groups before success, removes stale or unowned state without signaling its referenced process, and exits nonzero if a live owner is ambiguous or an endpoint remains live.
 
 Do not treat `app-health` alone as proof that the current branch is ready. `get-going` checks both configured routes, including the fail-closed `agora` foundation route. If health is ready but another function route is `404`, or a business route returns `503` after adding shared imports, restart the local stack with `npm run all-done` and `npm run get-going` before running security tests. If Edge Runtime is healthy but Kong reports name-resolution failures, restarting the local Kong container for this Supabase project may be enough.
 
@@ -76,3 +76,5 @@ npm run all-done
 ```
 
 `npm run build:netlify` additionally validates deploy-time runtime-config substitution when supplied with the placeholder variables documented in `README.ENV.md`.
+
+The `Validate` GitHub Actions workflow runs lint, unit, and production-build checks on Linux and macOS. The unit suite includes the real graceful-shutdown and resistant-descendant escalation fixture on both advertised local-development platforms.

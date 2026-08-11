@@ -12,6 +12,7 @@ import {
 } from '../../../scripts/managed-processes.mjs'
 import {
   isProcessExecuting,
+  parseDarwinProcessLine,
   processGroupMembersMatch,
   readProcessIdentity,
   stableProcessIdentityMatches
@@ -46,6 +47,23 @@ const readFixturePid = (path) => {
 }
 
 describe('managed process groups', () => {
+  it('parses macOS process identity fields used by lifecycle checks', () => {
+    expect(parseDarwinProcessLine(
+      ' 4242 4242 S+ Tue Aug 12 10:11:12 2026 agora:0123456789abcdef'
+    )).toEqual({
+      pid: 4242,
+      platform: 'darwin',
+      processGroupId: 4242,
+      startTime: 'Tue Aug 12 10:11:12 2026',
+      state: 'S+',
+      title: 'agora:0123456789abcdef'
+    })
+
+    expect(() => parseDarwinProcessLine('not a process row')).toThrow(
+      'Could not parse macOS process identity.'
+    )
+  })
+
   it('rejects a reused member identity before escalation', () => {
     const expected = [{
       bootId: 'fixture-boot',
@@ -60,7 +78,7 @@ describe('managed process groups', () => {
     }])).toBe(false)
   })
 
-  it.runIf(platform() === 'linux')(
+  it.runIf(platform() === 'linux' || platform() === 'darwin')(
     'escalates when the direct child exits but a same-group descendant resists SIGTERM',
     async () => {
       const fixtureDirectory = mkdtempSync(join(tmpdir(), 'agora-managed-processes-'))
