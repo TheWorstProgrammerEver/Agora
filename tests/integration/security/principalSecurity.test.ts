@@ -1,68 +1,24 @@
 import { randomUUID } from 'node:crypto'
-import type { SupabaseClient } from '@supabase/supabase-js'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
+import {
+  createHumanFixtures,
+  deleteHumanFixtures,
+  type HumanFixture
+} from './humanFixture'
 import { createAdminClient, createAnonymousClient } from './localSupabase'
 
-type HumanFixture = {
-  client: SupabaseClient
-  email: string
-  principalId: string
-  userId: string
-}
-
-const password = 'Agora-security-password-1'
 const admin = createAdminClient()
 const transientPrincipalIds: string[] = []
-const createdUserIds: string[] = []
-
-const createHuman = async (label: string): Promise<HumanFixture> => {
-  const client = createAnonymousClient()
-  const email = `agora-${label}-${randomUUID()}@example.test`
-  const displayName = `Agora ${label}`
-  const { data, error } = await client.auth.signUp({
-    email,
-    password,
-    options: { data: { display_name: displayName } }
-  })
-
-  if (error || !data.user || !data.session) {
-    throw error ?? new Error(`Public signup did not create an authenticated ${label} fixture.`)
-  }
-
-  createdUserIds.push(data.user.id)
-  const principalResult = await admin
-    .from('principals')
-    .select('id, kind, auth_user_id, display_name')
-    .eq('auth_user_id', data.user.id)
-    .single()
-
-  if (principalResult.error) {
-    throw principalResult.error
-  }
-
-  expect(principalResult.data).toMatchObject({
-    auth_user_id: data.user.id,
-    display_name: displayName,
-    kind: 'human'
-  })
-
-  return {
-    client,
-    email,
-    principalId: principalResult.data.id as string,
-    userId: data.user.id
-  }
-}
 
 describe('human principal security', () => {
+  const humans: HumanFixture[] = []
   let first: HumanFixture
   let second: HumanFixture
 
   beforeAll(async () => {
-    [first, second] = await Promise.all([
-      createHuman('first'),
-      createHuman('second')
-    ])
+    humans.push(...await createHumanFixtures(['first', 'second']))
+    first = humans[0]
+    second = humans[1]
   })
 
   afterEach(async () => {
@@ -80,23 +36,7 @@ describe('human principal security', () => {
   })
 
   afterAll(async () => {
-    const deleteResults = await Promise.all(createdUserIds.map((id) => admin.auth.admin.deleteUser(id)))
-    const deleteError = deleteResults.find((result) => result.error)?.error
-
-    if (deleteError) {
-      throw deleteError
-    }
-
-    const { count, error } = await admin
-      .from('principals')
-      .select('id', { count: 'exact', head: true })
-      .in('auth_user_id', createdUserIds)
-
-    if (error) {
-      throw error
-    }
-
-    expect(count).toBe(0)
+    await deleteHumanFixtures(humans)
   })
 
   it('creates one server-controlled human principal for each public signup', () => {
