@@ -104,8 +104,9 @@ describe.sequential('anonymous health endpoint', () => {
     expect(body).not.toMatch(sensitiveTerms)
   })
 
-  it('does not accept probe parameters, bodies, or alternate methods', async () => {
+  it('does not accept suffix paths, probe parameters, bodies, or alternate methods', async () => {
     const responses = await Promise.all([
+      getHealth(`${healthUrl}/unexpected`),
       getHealth(`${healthUrl}?inspect=schema`),
       getHealth(healthUrl, { method: 'PUT' }),
       getHealth(healthUrl, {
@@ -117,8 +118,9 @@ describe.sequential('anonymous health endpoint', () => {
 
     await Promise.all([
       expectGenericFailure(responses[0], 400),
-      expectGenericFailure(responses[1], 405),
-      expectGenericFailure(responses[2], 405)
+      expectGenericFailure(responses[1], 400),
+      expectGenericFailure(responses[2], 405),
+      expectGenericFailure(responses[3], 405)
     ])
   })
 

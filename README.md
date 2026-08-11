@@ -42,10 +42,10 @@ Agora's anonymous `GET /health` contract is deployed by Supabase at
 does not inspect caller credentials, expose application data, grant direct
 database access, or share the canonical chat dispatcher.
 
-The function rejects alternate methods and probe parameters, maps database
-errors to `503 {"ok":false}`, and applies an independent per-worker request
-budget before database access. See `README.ENV.md` for deployment variables,
-timeout bounds, and monitor retry guidance.
+The function rejects suffix paths, alternate methods, and probe parameters,
+maps database errors to `503 {"ok":false}`, and applies an independent
+per-worker request budget before database access. See `README.ENV.md` for
+deployment variables, timeout bounds, and monitor retry guidance.
 
 ## Shared Request Contract
 

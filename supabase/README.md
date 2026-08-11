@@ -43,10 +43,11 @@ http://127.0.0.1:54321/functions/v1/health
 ```
 
 It returns success to an anonymous request only after the read-only
-`public.agora_health_check()` RPC executes. `npm run get-going` also validates
-every enabled `[functions.*]` route in `supabase/config.toml`, including the
-fail-closed `agora` route, so a stale Edge Runtime cannot hide the canonical
-function behind a passing health check.
+`public.agora_health_check()` RPC executes. Suffix paths beneath the function
+name are malformed and return a generic failure without running that RPC.
+`npm run get-going` also validates every enabled `[functions.*]` route in
+`supabase/config.toml`, including the fail-closed `agora` route, so a stale Edge
+Runtime cannot hide the canonical function behind a passing health check.
 If a business route is `404`, or `503` after adding shared imports, restart the
 local Supabase stack before running security tests. If Kong reports
 name-resolution failures while Edge Runtime is healthy, restarting the local

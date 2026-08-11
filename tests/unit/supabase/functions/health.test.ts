@@ -4,7 +4,7 @@ import { createDatabaseCheck } from '../../../../supabase/functions/health/datab
 import { createHealthHandler } from '../../../../supabase/functions/health/handler'
 import { createRateLimiter } from '../../../../supabase/functions/health/rateLimiter'
 
-const healthRequest = (path = '/functions/v1/health', init?: RequestInit) => new Request(
+const healthRequest = (path = '/health', init?: RequestInit) => new Request(
   `http://localhost${path}`,
   init
 )
@@ -34,9 +34,10 @@ describe('health handler', () => {
   })
 
   it.each([
-    ['a non-GET method', healthRequest('/functions/v1/health', { method: 'POST' }), 405],
-    ['query parameters', healthRequest('/functions/v1/health?probe=schema'), 400],
-    ['a request body', healthRequest('/functions/v1/health', {
+    ['a non-GET method', healthRequest('/health', { method: 'POST' }), 405],
+    ['a suffix path', healthRequest('/health/unexpected'), 400],
+    ['query parameters', healthRequest('/health?probe=schema'), 400],
+    ['a request body', healthRequest('/health', {
       body: 'probe',
       method: 'POST'
     }), 405]

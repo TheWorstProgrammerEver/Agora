@@ -12,6 +12,8 @@ const responseHeaders = {
   'x-content-type-options': 'nosniff'
 }
 
+const healthPath = '/health'
+
 const healthResponse = (status: number, ok: boolean, extraHeaders = {}) => new Response(
   JSON.stringify({ ok }),
   {
@@ -24,7 +26,8 @@ const requestIsMalformed = (request: Request) => {
   const url = new URL(request.url)
   const contentLength = request.headers.get('content-length')
 
-  return url.search.length > 0
+  return url.pathname !== healthPath
+    || url.search.length > 0
     || request.headers.has('transfer-encoding')
     || (contentLength !== null && contentLength !== '0')
 }

@@ -94,11 +94,12 @@ malformed traffic is also bounded. Every worker enforces its own budget; keep
 the limit conservative when the hosted platform scales the function across
 multiple workers.
 
-Only a body-free GET with no query string is accepted. Success is exactly
-`200 {"ok":true}`. Database/configuration failures are exactly
-`503 {"ok":false}`; overload is `429 {"ok":false}` with `Retry-After`;
-malformed methods or inputs receive `405` or `400` with the same generic
-failure body. Every response includes `Cache-Control: no-store`.
+Only a body-free GET at the exact function path `/health` with no query string
+is accepted; suffix paths are malformed. Success is exactly `200 {"ok":true}`.
+Database/configuration failures are exactly `503 {"ok":false}`; overload is
+`429 {"ok":false}` with `Retry-After`; malformed methods or inputs receive
+`405` or `400` with the same generic failure body. Every response includes
+`Cache-Control: no-store`.
 
 After deployment, invoke each function once and inspect hosted function logs for import-time dependency warnings. Repo/build Node versions are separate from hosted Edge Runtime versions.
 
