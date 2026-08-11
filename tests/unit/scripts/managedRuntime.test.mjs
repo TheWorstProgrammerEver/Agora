@@ -49,7 +49,7 @@ describe('managed runtime identity', () => {
       pid: 4343,
       startTimeTicks: '654321'
     }
-    const clearIdentity = vi.fn()
+    const clearIdentity = vi.fn(() => true)
     const writeIdentity = vi.fn()
 
     await expect(claimRuntimeIdentity({
@@ -67,7 +67,7 @@ describe('managed runtime identity', () => {
 
 describe('managed runtime shutdown', () => {
   it('clears an unowned record without signaling its process', async () => {
-    const clearIdentity = vi.fn()
+    const clearIdentity = vi.fn(() => true)
     const sendSignal = vi.fn()
 
     await expect(stopManagedRuntime(identity, {
@@ -96,7 +96,7 @@ describe('managed runtime shutdown', () => {
   })
 
   it('revalidates ownership before forced shutdown', async () => {
-    const clearIdentity = vi.fn()
+    const clearIdentity = vi.fn(() => true)
     const inspectProcess = vi.fn()
       .mockResolvedValueOnce('owned')
       .mockResolvedValueOnce('owned')
@@ -135,7 +135,7 @@ describe('managed runtime shutdown', () => {
   })
 
   it('reports success only after the owned identity disappears', async () => {
-    const clearIdentity = vi.fn()
+    const clearIdentity = vi.fn(() => true)
     const inspectProcess = vi.fn()
       .mockResolvedValueOnce('owned')
       .mockResolvedValueOnce('owned')
@@ -151,6 +151,20 @@ describe('managed runtime shutdown', () => {
 
     expect(sendSignal).toHaveBeenCalledWith(identity.pid, 'SIGTERM')
     expect(clearIdentity).toHaveBeenCalledWith(identity)
+  })
+
+  it('reports a replacement state instead of clearing it as the stopped owner', async () => {
+    const clearIdentity = vi.fn(() => false)
+    const sendSignal = vi.fn()
+
+    await expect(stopManagedRuntime(identity, {
+      clearIdentity,
+      inspectProcess: async () => 'unowned',
+      sendSignal
+    })).resolves.toBe('state-changed')
+
+    expect(clearIdentity).toHaveBeenCalledWith(identity)
+    expect(sendSignal).not.toHaveBeenCalled()
   })
 
   it('refuses to signal a live legacy record without stable identity', async () => {

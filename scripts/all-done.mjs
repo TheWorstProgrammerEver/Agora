@@ -3,7 +3,8 @@ import { readFileSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 import {
   readRuntimeIdentity,
-  stopManagedRuntime
+  stopManagedRuntime,
+  withManagedRuntimeState
 } from './managed-runtime.mjs'
 
 const appPort = 5173
@@ -81,23 +82,33 @@ const getSupabaseProjectId = () => {
 }
 
 const stopManagedDevRuntime = async () => {
-  const identity = readRuntimeIdentity()
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const identity = readRuntimeIdentity()
 
-  if (!identity) {
-    console.log('OK  Agora-managed dev processes have no active runtime record')
+    if (!identity) {
+      console.log('OK  Agora-managed dev processes have no active runtime record')
+      return
+    }
+
+    console.log(`Stopping Agora-managed dev runtime (${identity.pid})...`)
+    const result = await stopManagedRuntime(identity)
+
+    if (result === 'state-changed') {
+      continue
+    }
+
+    if (result === 'already-stopped') {
+      console.log('OK  Recorded Agora dev runtime was already stopped')
+    }
+
+    if (result === 'stale-record-cleared') {
+      console.log('OK  Removed stale Agora runtime state without signaling its unowned process')
+    }
+
     return
   }
 
-  console.log(`Stopping Agora-managed dev runtime (${identity.pid})...`)
-  const result = await stopManagedRuntime(identity)
-
-  if (result === 'already-stopped') {
-    console.log('OK  Recorded Agora dev runtime was already stopped')
-  }
-
-  if (result === 'stale-record-cleared') {
-    console.log('OK  Removed stale Agora runtime state without signaling its unowned process')
-  }
+  throw new Error('Agora runtime ownership kept changing during shutdown; retry npm run all-done.')
 }
 
 const disableSupabaseContainerRestarts = async () => {
@@ -179,19 +190,27 @@ const printEndpointStatus = (statuses) => {
 }
 
 export const main = async () => {
-  await stopManagedDevRuntime()
-  await disableSupabaseContainerRestarts()
-  await stopSupabase()
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await stopManagedDevRuntime()
+    await disableSupabaseContainerRestarts()
+    await stopSupabase()
 
-  const statuses = await waitForEndpointsOff()
-  printEndpointStatus(statuses)
-  const running = statuses.filter((status) => status.running)
+    const statuses = await waitForEndpointsOff()
+    printEndpointStatus(statuses)
+    const running = statuses.filter((status) => status.running)
+    const runtimeIdentity = await withManagedRuntimeState(() => readRuntimeIdentity())
 
-  if (running.length > 0) {
-    throw new Error(`Local shutdown is incomplete; still responding: ${running.map(({ label }) => label).join(', ')}.`)
+    if (!runtimeIdentity && running.length === 0) {
+      console.log('\nAll done.')
+      return
+    }
+
+    if (!runtimeIdentity) {
+      throw new Error(`Local shutdown is incomplete; still responding: ${running.map(({ label }) => label).join(', ')}.`)
+    }
   }
 
-  console.log('\nAll done.')
+  throw new Error('Agora runtime restarted repeatedly during shutdown; retry npm run all-done.')
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

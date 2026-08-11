@@ -452,7 +452,7 @@ const main = async () => {
     }
   } finally {
     await stopManagedProcesses(managedProcesses)
-    clearRuntimeIdentity(runtimeIdentity)
+    await clearRuntimeIdentity(runtimeIdentity)
   }
 }
 

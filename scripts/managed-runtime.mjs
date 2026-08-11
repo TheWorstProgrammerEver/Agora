@@ -13,6 +13,7 @@ import {
   readProcessIdentity,
   stableProcessIdentityMatches
 } from './process-identity.mjs'
+import { withRuntimeStateCoordinator } from './runtime-state-coordinator.mjs'
 
 const runtimeDirectory = fileURLToPath(new URL('../.agora-runtime/', import.meta.url))
 const runtimeStatePath = fileURLToPath(new URL('../.agora-runtime/get-going.json', import.meta.url))
@@ -118,6 +119,18 @@ const persistRuntimeIdentity = (identity) => {
   })
 }
 
+const removeRuntimeIdentity = () => {
+  rmSync(runtimeStatePath, { force: true })
+
+  try {
+    rmdirSync(runtimeDirectory)
+  } catch (error) {
+    if (error?.code !== 'ENOENT' && error?.code !== 'ENOTEMPTY') {
+      throw error
+    }
+  }
+}
+
 const runtimeIdentityMatches = (left, right) => {
   if (
     !left
@@ -160,20 +173,32 @@ export const inspectRuntimeProcess = async (
   return stableProcessIdentityMatches(identity, current) ? 'owned' : 'unowned'
 }
 
-export const clearRuntimeIdentity = (identity) => {
-  const current = readRuntimeIdentity()
+const clearRuntimeIdentityIfCurrent = (identity, overrides = {}) => {
+  const readIdentity = overrides.readIdentity ?? readRuntimeIdentity
+  const removeIdentity = overrides.removeIdentity ?? removeRuntimeIdentity
+  const current = readIdentity()
 
   if (current && runtimeIdentityMatches(current, identity)) {
-    rmSync(runtimeStatePath, { force: true })
-
-    try {
-      rmdirSync(runtimeDirectory)
-    } catch (error) {
-      if (error?.code !== 'ENOENT' && error?.code !== 'ENOTEMPTY') {
-        throw error
-      }
-    }
+    removeIdentity()
+    return true
   }
+
+  return false
+}
+
+const coordinateRuntimeState = (operation, overrides = {}) => (
+  withRuntimeStateCoordinator(runtimeStatePath, operation, overrides)
+)
+
+export const withManagedRuntimeState = (operation, overrides) => (
+  coordinateRuntimeState(operation, overrides)
+)
+
+export const clearRuntimeIdentity = async (identity, overrides = {}) => {
+  const coordinate = overrides.coordinate
+    ?? ((operation) => coordinateRuntimeState(operation, overrides.coordinatorOptions))
+
+  return coordinate(() => clearRuntimeIdentityIfCurrent(identity, overrides))
 }
 
 export const claimRuntimeIdentity = async (overrides = {}) => {
@@ -183,40 +208,51 @@ export const claimRuntimeIdentity = async (overrides = {}) => {
 
   const readIdentity = overrides.readIdentity ?? readRuntimeIdentity
   const inspectProcess = overrides.inspectProcess ?? inspectRuntimeProcess
-  const clearIdentity = overrides.clearIdentity ?? clearRuntimeIdentity
+  const clearIdentity = overrides.clearIdentity
+    ?? ((identity) => clearRuntimeIdentityIfCurrent(identity, {
+      readIdentity,
+      removeIdentity: overrides.removeIdentity
+    }))
   const createIdentity = overrides.createIdentity ?? createCurrentRuntimeIdentity
   const writeIdentity = overrides.writeIdentity ?? persistRuntimeIdentity
-  const existing = readIdentity()
+  const coordinate = overrides.coordinate
+    ?? ((operation) => coordinateRuntimeState(operation, overrides.coordinatorOptions))
 
-  if (existing) {
-    const status = await inspectProcess(existing)
+  return coordinate(async () => {
+    const existing = readIdentity()
 
-    if (status === 'owned') {
-      throw new Error('Cannot start Agora: another Agora get-going process is active.')
+    if (existing) {
+      const status = await inspectProcess(existing)
+
+      if (status === 'owned') {
+        throw new Error('Cannot start Agora: another Agora get-going process is active.')
+      }
+
+      if (status === 'legacy-owned') {
+        throw new Error('Cannot start Agora: a live legacy runtime cannot be signaled safely. Stop that get-going process, then run npm run all-done.')
+      }
+
+      if (!await clearIdentity(existing)) {
+        throw new Error('Cannot start Agora: runtime state changed during recovery.')
+      }
     }
 
-    if (status === 'legacy-owned') {
-      throw new Error('Cannot start Agora: a live legacy runtime cannot be signaled safely. Stop that get-going process, then run npm run all-done.')
+    const identity = await createIdentity()
+
+    try {
+      await writeIdentity(identity)
+    } catch (error) {
+      if (error?.code === 'EEXIST') {
+        throw new Error('Cannot start Agora: another get-going process claimed the runtime state.')
+      }
+
+      throw error
     }
 
-    clearIdentity(existing)
-  }
-
-  const identity = await createIdentity()
-
-  try {
-    writeIdentity(identity)
-  } catch (error) {
-    if (error?.code === 'EEXIST') {
-      throw new Error('Cannot start Agora: another get-going process claimed the runtime state.')
+    return {
+      ...identity
     }
-
-    throw error
-  }
-
-  return {
-    ...identity
-  }
+  })
 }
 
 export const readRuntimeIdentity = () => {
@@ -254,13 +290,11 @@ export const stopManagedRuntime = async (identity, overrides = {}) => {
   const initialStatus = await inspectProcess(identity)
 
   if (initialStatus === 'stopped') {
-    clearIdentity(identity)
-    return 'already-stopped'
+    return await clearIdentity(identity) ? 'already-stopped' : 'state-changed'
   }
 
   if (initialStatus === 'unowned') {
-    clearIdentity(identity)
-    return 'stale-record-cleared'
+    return await clearIdentity(identity) ? 'stale-record-cleared' : 'state-changed'
   }
 
   if (initialStatus === 'legacy-owned') {
@@ -285,14 +319,12 @@ export const stopManagedRuntime = async (identity, overrides = {}) => {
     await wait(checkIntervalMs)
 
     if (await inspectProcess(identity) !== 'owned') {
-      clearIdentity(identity)
-      return 'stopped'
+      return await clearIdentity(identity) ? 'stopped' : 'state-changed'
     }
   }
 
   if (await inspectProcess(identity) !== 'owned') {
-    clearIdentity(identity)
-    return 'stopped'
+    return await clearIdentity(identity) ? 'stopped' : 'state-changed'
   }
 
   try {
@@ -307,8 +339,7 @@ export const stopManagedRuntime = async (identity, overrides = {}) => {
     await wait(checkIntervalMs)
 
     if (await inspectProcess(identity) !== 'owned') {
-      clearIdentity(identity)
-      return 'stopped'
+      return await clearIdentity(identity) ? 'stopped' : 'state-changed'
     }
   }
 
