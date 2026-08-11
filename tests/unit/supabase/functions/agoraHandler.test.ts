@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { agoraRequestIdentifiers } from '../../../../common/agoraRequestIdentifiers'
 import { MissingAuthenticationError } from '../../../../supabase/functions/agora/auth/authenticatePrincipal'
 import { createAgoraHandler } from '../../../../supabase/functions/agora/handler'
+import { AgoraGroupRequestError } from '../../../../supabase/functions/agora/handlers/groups/error'
 
 const context = {
   database: { rpc: async () => ({ data: null, error: null }) },
@@ -91,5 +92,26 @@ describe('Agora HTTP handler', () => {
     expect(response.status).toBe(500)
     expect(body).toBe('{"error":"Agora request failed."}')
     expect(body).not.toContain('private failure detail')
+  })
+
+  it('projects bounded group authorization failures', async () => {
+    const handler = createAgoraHandler({
+      authenticate: vi.fn().mockResolvedValue(context),
+      createDispatcher: () => ({
+        dispatch: vi.fn().mockRejectedValue(
+          new AgoraGroupRequestError('This group operation is not permitted.', 403)
+        )
+      }),
+      parseRequest: vi.fn().mockResolvedValue({
+        identifier: agoraRequestIdentifiers.deleteGroup,
+        params: { groupId: randomUUID() }
+      })
+    })
+    const response = await handler(request())
+
+    expect(response.status).toBe(403)
+    await expect(response.json()).resolves.toEqual({
+      error: 'This group operation is not permitted.'
+    })
   })
 })

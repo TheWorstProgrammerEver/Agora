@@ -14,8 +14,12 @@ describe('Agora Edge dispatcher', () => {
     const dispatcher = createAgoraDispatcher(createContext('human'))
 
     await expect(dispatcher.dispatch({
-      identifier: agoraRequestIdentifiers.listGroups,
-      params: {}
+      identifier: agoraRequestIdentifiers.sendMessage,
+      params: {
+        clientMessageId: 'attempt-1',
+        groupId: randomUUID(),
+        text: 'Hello'
+      }
     })).rejects.toThrow('Agora request handler is not implemented yet.')
   })
 

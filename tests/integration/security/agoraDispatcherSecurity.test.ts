@@ -78,10 +78,8 @@ describe('Agora dual-auth dispatcher', () => {
       const body = await response.json()
 
       expect({ body, status: response.status }).toEqual({
-        body: {
-          error: 'Agora request handler is not implemented yet.'
-        },
-        status: 501
+        body: { items: [] },
+        status: 200
       })
     }
   })
@@ -147,10 +145,8 @@ describe('Agora dual-auth dispatcher', () => {
       'x-agora-agent-key': fixtures.agent.applicationKey
     })
 
-    expect(response.status).toBe(501)
-    await expect(response.json()).resolves.toEqual({
-      error: 'Agora request handler is not implemented yet.'
-    })
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toEqual({ items: [] })
   })
 
   it('does not fall back to a valid agent key when an explicit human token is invalid', async () => {

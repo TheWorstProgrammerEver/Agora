@@ -5,6 +5,7 @@ import {
 import { agoraRequestNames } from '../../../../common/agoraRequestIdentifiers.ts'
 import type { AuthorizedPrincipalContext } from '../auth/principalContext.ts'
 import type { AgoraRequestHandlerFactory } from './factory.ts'
+import { groupHandlerFactories } from './groups/index.ts'
 import { unavailableHandlerFactories } from './unavailable.ts'
 
 const mergeFactories = (overrides: AgoraRequestHandlerFactory[]) => {
@@ -18,6 +19,10 @@ const mergeFactories = (overrides: AgoraRequestHandlerFactory[]) => {
     factory.identifier,
     factory
   ]))
+
+  for (const factory of groupHandlerFactories) {
+    byIdentifier.set(factory.identifier, factory)
+  }
 
   for (const override of overrides) {
     byIdentifier.set(override.identifier, override)

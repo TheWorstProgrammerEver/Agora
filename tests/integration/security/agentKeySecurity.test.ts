@@ -285,7 +285,7 @@ describe('agent key resolver', () => {
   it('denies a revoked key immediately on the next request', async () => {
     await withAgent(async (agent) => {
       await expect(resolvePrincipalId(agent)).resolves.toBe(agent.principalId)
-      expect((await postAgentRequest(agent.applicationKey)).status).toBe(501)
+      expect((await postAgentRequest(agent.applicationKey)).status).toBe(200)
 
       const revocation = await admin.rpc('revoke_agent_application_key', {
         application_key_id_to_revoke: agent.keyId,

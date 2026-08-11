@@ -47,7 +47,7 @@ afterAll(async () => {
 })
 
 describe.sequential('anonymous health endpoint', () => {
-  it('limits anonymous database grants to the RLS-protected principal resolver surface', async () => {
+  it('limits anonymous database grants to principal resolution and member queries', async () => {
     const functions = await database.query<{
       allowed: boolean
       function_name: string
@@ -85,7 +85,9 @@ describe.sequential('anonymous health endpoint', () => {
     expect(functions.rows.filter(({ allowed }) => allowed)).toEqual([
       { allowed: true, function_name: 'current_agent_principal_id' },
       { allowed: true, function_name: 'current_principal_id' },
-      { allowed: true, function_name: 'current_principal_is_group_member' }
+      { allowed: true, function_name: 'current_principal_is_group_member' },
+      { allowed: true, function_name: 'get_agora_group' },
+      { allowed: true, function_name: 'list_agora_groups' }
     ])
     expect(healthGrants.rows).toEqual([{
       anonymous: false,

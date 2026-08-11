@@ -3,6 +3,7 @@ import { AgoraAuthenticationError } from './auth/authenticationError.ts'
 import type { AgoraDispatchRequest } from './request.ts'
 import { AgoraRequestParseError } from './request.ts'
 import { AgoraHandlerUnavailableError } from './handlers/unavailable.ts'
+import { AgoraGroupRequestError } from './handlers/groups/error.ts'
 
 type AgoraDispatcher = {
   dispatch(request: AgoraDispatchRequest): Promise<unknown>
@@ -74,6 +75,7 @@ export const createAgoraHandler = ({
   } catch (error) {
     if (error instanceof AgoraAuthenticationError
       || error instanceof AgoraRequestParseError
+      || error instanceof AgoraGroupRequestError
       || error instanceof AgoraHandlerUnavailableError) {
       return jsonResponse(error.status, { error: error.message })
     }
