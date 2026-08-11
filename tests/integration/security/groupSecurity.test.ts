@@ -81,6 +81,13 @@ describe('group-domain security', () => {
       .from('memberships')
       .update({ role: 'member' })
       .eq('id', ownerMembershipId)
+    const moveAndDemoteOwner = await admin
+      .from('memberships')
+      .update({
+        group_id: source.groups.hidden,
+        role: 'member'
+      })
+      .eq('id', ownerMembershipId)
     const deleteOwner = await admin.from('memberships').delete().eq('id', ownerMembershipId)
     const transferOwner = await admin
       .from('groups')
@@ -93,9 +100,26 @@ describe('group-domain security', () => {
 
     expect(secondOwner.error?.code).toBe('23514')
     expect(demoteOwner.error?.code).toBe('23514')
+    expect(moveAndDemoteOwner.error?.code).toBe('23514')
     expect(deleteOwner.error?.code).toBe('23514')
     expect(transferOwner.error?.code).toBe('23514')
     expect(convertOwnerToAgent.error?.code).toBe('23514')
+
+    const preservedOwnerMembership = await admin
+      .from('memberships')
+      .select('group_id, principal_id, role')
+      .eq('id', ownerMembershipId)
+      .single()
+
+    expect(preservedOwnerMembership.error).toBeNull()
+    expect(preservedOwnerMembership.data).toEqual({
+      group_id: source.groups.visible,
+      principal_id: source.humans.owner.principalId,
+      role: 'owner'
+    })
+    await expect(selectIds(source.humans.owner.client, 'groups')).resolves.toEqual([
+      source.groups.visible
+    ])
   })
 
   it('allows agents to be members but never group owners', async () => {

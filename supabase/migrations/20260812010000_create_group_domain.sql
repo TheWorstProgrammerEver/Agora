@@ -139,6 +139,22 @@ declare
   group_owner_principal_id uuid;
   member_email text;
 begin
+  if tg_op = 'UPDATE'
+    and old.role = 'owner'::public.membership_role
+    and (
+      new.group_id is distinct from old.group_id
+      or new.principal_id is distinct from old.principal_id
+      or new.role is distinct from old.role
+    )
+    and exists (
+      select 1
+      from public.groups
+      where id = old.group_id
+    ) then
+    raise exception 'The group owner membership cannot be changed.'
+      using errcode = 'check_violation';
+  end if;
+
   -- Memberships take the same group lock before consuming an invitation.
   select owner_principal_id
   into group_owner_principal_id
