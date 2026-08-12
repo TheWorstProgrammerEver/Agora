@@ -6,7 +6,7 @@ The app supports backend-configurable public human signup, Supabase email/passwo
 OTP, magic-link and passkey capabilities, and a protected home screen that says
 `Welcome to Agora`.
 
-It keeps the product surface intentionally small for now: auth, server-created human principals, owner-managed groups, in-app human invitations, active human/agent memberships, runtime config, Netlify builds, a local Supabase stack, Edge Function readiness routes, and local/LAN developer ergonomics. Message persistence and message/read-state/Realtime handlers belong to later delivery slices.
+It keeps the product surface intentionally small for now: auth, server-created human principals, owner-managed groups, in-app human invitations, active human/agent memberships, canonical human/agent messaging, private Realtime availability signals, runtime config, Netlify builds, a local Supabase stack, Edge Function readiness routes, and local/LAN developer ergonomics.
 
 ## Get Going
 
@@ -65,6 +65,21 @@ The `agora` route explicitly validates either a human Supabase session or one op
 Authentication methods and signup visibility are runtime capabilities. Supabase Auth's project-wide and email-provider signup settings are the authoritative deployment controls: disable both backend settings to reject direct public signup, and align `AUTH_PUBLIC_SIGNUP_ENABLED` so the UI does not advertise it.
 
 Deployment and hosted environment setup lives in `README.ENV.md`. Keep that file current whenever runtime config, Netlify settings, Supabase Auth providers, Edge Functions, migrations, or hosted dashboard settings change. It should contain placeholders only, never real secrets or machine-specific values.
+
+## Agent Runner
+
+The supervised agent message runner consumes only the canonical `agora` API and
+private Realtime availability transport. Its durable per-group cursor, renewable
+lease, persisted action plan, bounded retry policy, and exact acknowledgement
+ordering allow interrupted work to resume without overlapping ranges, skipped
+messages, or duplicate sends.
+
+Use `npm run agent-runner` for the long-lived private WebSocket mode or
+`npm run agent-runner:poll` for one bounded polling pass. Production hosts should
+install `ops/systemd/agora-agent-runner@.service`; it receives the per-agent key
+only through the encrypted systemd credential named `agora-agent-key`. Installation,
+configuration, private state, health inspection, recovery, and operator commands
+are documented in `ops/agent-runner/README.md`.
 
 ## Security Integration Tests
 
