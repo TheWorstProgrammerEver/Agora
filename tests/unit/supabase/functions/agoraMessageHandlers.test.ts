@@ -41,6 +41,161 @@ const createContext = (
 }
 
 describe('Agora message handlers', () => {
+  it('uses sequence cursors for stable forward, backward, and context windows', async () => {
+    const principalId = randomUUID()
+    const groupId = randomUUID()
+    const rows = (sequences: string[], hasMore: boolean) => sequences.map((sequence) => (
+      messageRow(principalId, groupId, { has_more: hasMore, message_sequence: sequence })
+    ))
+    const { context, rpc } = createContext('human', principalId, [
+      { data: rows(['4', '5'], true), error: null },
+      { data: rows(['2', '3'], true), error: null },
+      { data: rows(['2', '3'], true), error: null },
+      { data: rows(['2', '3', '4'], false), error: null }
+    ])
+    const dispatcher = createAgoraDispatcher(context)
+
+    await expect(dispatcher.dispatch({
+      identifier: agoraRequestIdentifiers.getGroupMessages,
+      params: { groupId, limit: 2 }
+    })).resolves.toMatchObject({
+      items: [{ sequence: '4' }, { sequence: '5' }],
+      nextCursor: '4'
+    })
+    await expect(dispatcher.dispatch({
+      identifier: agoraRequestIdentifiers.getGroupMessages,
+      params: { afterSequence: '1', groupId, limit: 2 }
+    })).resolves.toMatchObject({
+      items: [{ sequence: '2' }, { sequence: '3' }],
+      nextCursor: '3'
+    })
+    await expect(dispatcher.dispatch({
+      identifier: agoraRequestIdentifiers.getGroupMessages,
+      params: { beforeSequence: '4', groupId, limit: 2 }
+    })).resolves.toMatchObject({
+      items: [{ sequence: '2' }, { sequence: '3' }],
+      nextCursor: '2'
+    })
+    await expect(dispatcher.dispatch({
+      identifier: agoraRequestIdentifiers.getGroupMessages,
+      params: { aroundSequence: '3', groupId, limit: 1 }
+    })).resolves.toEqual({
+      items: [
+        expect.objectContaining({ sequence: '2' }),
+        expect.objectContaining({ sequence: '3' }),
+        expect.objectContaining({ sequence: '4' })
+      ]
+    })
+    expect(rpc.mock.calls).toEqual([
+      ['get_agora_group_messages', {
+        after_sequence_to_use: undefined,
+        around_sequence_to_use: undefined,
+        before_sequence_to_use: undefined,
+        group_id_to_get: groupId,
+        page_size: 2
+      }],
+      ['get_agora_group_messages', {
+        after_sequence_to_use: '1',
+        around_sequence_to_use: undefined,
+        before_sequence_to_use: undefined,
+        group_id_to_get: groupId,
+        page_size: 2
+      }],
+      ['get_agora_group_messages', {
+        after_sequence_to_use: undefined,
+        around_sequence_to_use: undefined,
+        before_sequence_to_use: '4',
+        group_id_to_get: groupId,
+        page_size: 2
+      }],
+      ['get_agora_group_messages', {
+        after_sequence_to_use: undefined,
+        around_sequence_to_use: '3',
+        before_sequence_to_use: undefined,
+        group_id_to_get: groupId,
+        page_size: 1
+      }]
+    ])
+  })
+
+  it('loads unread pages without advancing them and maps explicit read acknowledgement', async () => {
+    const principalId = randomUUID()
+    const groupId = randomUUID()
+    const { context, rpc } = createContext('agent', principalId, [
+      {
+        data: [
+          messageRow(principalId, groupId, { has_more: true, message_sequence: '8' }),
+          messageRow(principalId, groupId, { has_more: true, message_sequence: '9' })
+        ],
+        error: null
+      },
+      {
+        data: [{ watermark_group_id: groupId, watermark_sequence: '9' }],
+        error: null
+      }
+    ])
+    const dispatcher = createAgoraDispatcher(context)
+
+    await expect(dispatcher.dispatch({
+      identifier: agoraRequestIdentifiers.getUnreadMessages,
+      params: { afterSequence: '7', groupId, limit: 2 }
+    })).resolves.toMatchObject({
+      items: [{ sequence: '8' }, { sequence: '9' }],
+      nextCursor: '9'
+    })
+    await expect(dispatcher.dispatch({
+      identifier: agoraRequestIdentifiers.markGroupRead,
+      params: { groupId, throughSequence: '9' }
+    })).resolves.toEqual({ groupId, sequence: '9' })
+    expect(rpc.mock.calls).toEqual([
+      ['get_agora_unread_messages', {
+        after_sequence_to_use: '7',
+        group_id_to_get: groupId,
+        page_size: 2
+      }],
+      ['mark_agora_group_read', {
+        group_id_to_mark: groupId,
+        through_sequence_to_use: '9'
+      }]
+    ])
+  })
+
+  it('rejects contradictory pagination metadata, ordering, and watermark rows', async () => {
+    const principalId = randomUUID()
+    const groupId = randomUUID()
+    const malformedMetadata = createContext('human', principalId, [{
+      data: [
+        messageRow(principalId, groupId, { has_more: true, message_sequence: '1' }),
+        messageRow(principalId, groupId, { has_more: false, message_sequence: '2' })
+      ],
+      error: null
+    }])
+    const malformedOrder = createContext('human', principalId, [{
+      data: [
+        messageRow(principalId, groupId, { has_more: false, message_sequence: '2' }),
+        messageRow(principalId, groupId, { has_more: false, message_sequence: '1' })
+      ],
+      error: null
+    }])
+    const malformedWatermark = createContext('human', principalId, [{
+      data: [{ watermark_group_id: randomUUID(), watermark_sequence: '1' }],
+      error: null
+    }])
+    const pageRequest = {
+      identifier: agoraRequestIdentifiers.getGroupMessages,
+      params: { groupId }
+    } as const
+
+    await expect(createAgoraDispatcher(malformedMetadata.context).dispatch(pageRequest))
+      .rejects.toThrow('Agora message database response is invalid.')
+    await expect(createAgoraDispatcher(malformedOrder.context).dispatch(pageRequest))
+      .rejects.toThrow('Agora message database response is invalid.')
+    await expect(createAgoraDispatcher(malformedWatermark.context).dispatch({
+      identifier: agoraRequestIdentifiers.markGroupRead,
+      params: { groupId, throughSequence: '1' }
+    })).rejects.toThrow('Agora message database response is invalid.')
+  })
+
   it('routes human and agent sends through the same RPC without a caller-selected sender', async () => {
     for (const kind of ['human', 'agent'] as const) {
       const principalId = randomUUID()

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   maximumClientMessageIdLength,
+  maximumMessagePageSize,
   maximumMessageTextLength
 } from '../../../common/agoraMessageLimits'
 import { agoraRequestIdentifiers } from '../../../common/agoraRequestIdentifiers'
@@ -58,8 +59,43 @@ describe('Agora request parameter validation', () => {
       groupId: firstId,
       limit: 101
     })).toBe(false)
+    expect(isAgoraRequestParams(agoraRequestIdentifiers.getGroupMessages, {
+      groupId: firstId,
+      limit: maximumMessagePageSize + 1
+    })).toBe(false)
+    expect(isAgoraRequestParams(agoraRequestIdentifiers.getUnreadMessages, {
+      groupId: firstId,
+      limit: maximumMessagePageSize + 1
+    })).toBe(false)
     expect(isAgoraRequestParams(agoraRequestIdentifiers.createGroup, {
       name: 'x'.repeat(121)
+    })).toBe(false)
+  })
+
+  it('accepts only canonical sequence cursors for each message operation', () => {
+    expect(isAgoraRequestParams(agoraRequestIdentifiers.getGroupMessages, {
+      afterSequence: '0',
+      groupId: firstId
+    })).toBe(true)
+
+    for (const invalidSequence of ['', '-1', '01', '1.5', ' 1']) {
+      expect(isAgoraRequestParams(agoraRequestIdentifiers.getUnreadMessages, {
+        afterSequence: invalidSequence,
+        groupId: firstId
+      })).toBe(false)
+      expect(isAgoraRequestParams(agoraRequestIdentifiers.markGroupRead, {
+        groupId: firstId,
+        throughSequence: invalidSequence
+      })).toBe(false)
+    }
+
+    expect(isAgoraRequestParams(agoraRequestIdentifiers.getGroupMessages, {
+      aroundSequence: '0',
+      groupId: firstId
+    })).toBe(false)
+    expect(isAgoraRequestParams(agoraRequestIdentifiers.getGroupMessages, {
+      beforeSequence: '0',
+      groupId: firstId
     })).toBe(false)
   })
 
