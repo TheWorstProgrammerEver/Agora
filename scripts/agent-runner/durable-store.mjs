@@ -60,9 +60,12 @@ const readPrivateFile = async (path, maximumBytes) => {
   try {
     handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW)
     const stat = await handle.stat()
+    // Atomic replacement can unlink the complete old generation after open()
+    // but before fstat(). That already-open inode is safe at nlink 0; extra
+    // hard links remain invalid.
     if (!stat.isFile()
       || stat.uid !== process.getuid?.()
-      || stat.nlink !== 1
+      || stat.nlink > 1
       || (stat.mode & 0o077) !== 0
       || stat.size > maximumBytes) {
       throw new Error('Agora runner private file custody is invalid.')

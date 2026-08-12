@@ -80,6 +80,34 @@ describe('durable runner store', () => {
       .rejects.toThrow('custody is invalid')
   })
 
+  it('reads complete generations while state is atomically replaced', async () => {
+    const store = await createStore()
+    const principalId = randomUUID()
+    await store.update((state) => {
+      state.principalId = principalId
+    })
+
+    const writer = async () => {
+      for (let index = 0; index < 100; index += 1) {
+        await store.update((state) => {
+          state.lastActivity = {
+            at: new Date(index + 1).toISOString(),
+            code: 'replacement',
+            status: 'healthy'
+          }
+        })
+      }
+    }
+    const reader = async () => {
+      for (let index = 0; index < 100; index += 1) {
+        expect((await store.read()).principalId).toBe(principalId)
+      }
+    }
+
+    await Promise.all([writer(), ...Array.from({ length: 20 }, reader)])
+    expect((await store.read()).lastActivity?.code).toBe('replacement')
+  })
+
   it('rejects symlinked state and multiply-linked durable plans', async () => {
     const store = await createStore()
     const outsideState = join(store.root, 'outside-state.json')
