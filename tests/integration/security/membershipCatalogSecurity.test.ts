@@ -27,6 +27,38 @@ const withDatabase = async <T>(run: (
 }
 
 describe('membership command database catalog security', () => {
+  it('derives the current invitation email from authoritative Auth state', async () => {
+    const row = await withDatabase(async (database) => (
+      await database.query<{
+        anon: boolean
+        authenticated: boolean
+        securityDefiner: boolean
+        settings: string[]
+        source: string
+      }>(`
+        select
+          has_function_privilege('anon', oid, 'execute') as anon,
+          has_function_privilege('authenticated', oid, 'execute') as authenticated,
+          prosecdef as "securityDefiner",
+          coalesce(proconfig, '{}') as settings,
+          prosrc as source
+        from pg_proc
+        where pronamespace = 'public'::regnamespace
+          and proname = 'current_auth_email'
+      `)
+    ).rows[0])
+
+    expect(row).toMatchObject({
+      anon: false,
+      authenticated: true,
+      securityDefiner: true
+    })
+    expect(row.settings).toContain('search_path=""')
+    expect(row.source).toContain('auth.users')
+    expect(row.source).toContain('auth.uid()')
+    expect(row.source).not.toContain('auth.jwt()')
+  })
+
   it('keeps every function security-definer with an empty search path', async () => {
     const rows = await withDatabase(async (database) => (
       await database.query<{
