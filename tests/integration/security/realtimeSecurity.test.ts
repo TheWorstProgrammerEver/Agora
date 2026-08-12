@@ -19,6 +19,7 @@ import {
   postHuman,
   type GroupLifecycleFixtures
 } from './groupLifecycleTestSupport'
+import { signInHumanFixture } from './humanFixture'
 import { createRealtimeCredentialClient } from './localSupabase'
 
 type BroadcastEnvelope = {
@@ -206,6 +207,71 @@ describe('private Realtime authorization and agent sessions', () => {
     } finally {
       if (agentRealtime) await cleanupRealtimeClient(agentRealtime)
       await cleanupRealtimeClient(owner.client)
+    }
+  })
+
+  it('denies human outsiders and pending invitees from private group topics', async () => {
+    const { member, outsider, owner } = requireFixtures()
+    const group = await createGroup(owner, 'Realtime human denial group')
+
+    try {
+      const invitation = await postHuman(owner, agoraRequestIdentifiers.inviteHuman, {
+        email: member.email,
+        groupId: group.id
+      })
+
+      expect(invitation.status).toBe(200)
+      await Promise.all([
+        member.client.realtime.setAuth(),
+        outsider.client.realtime.setAuth()
+      ])
+      const [pendingSubscription, outsiderSubscription] = await Promise.all([
+        subscribe(member.client, formatAgoraRealtimeTopic(group.id)),
+        subscribe(outsider.client, formatAgoraRealtimeTopic(group.id))
+      ])
+
+      expect(pendingSubscription.status).not.toBe('SUBSCRIBED')
+      expect(outsiderSubscription.status).not.toBe('SUBSCRIBED')
+    } finally {
+      await Promise.all([
+        cleanupRealtimeClient(member.client),
+        cleanupRealtimeClient(outsider.client)
+      ])
+    }
+  })
+
+  it('denies a removed human member on a fresh subscription and reconnect', async () => {
+    const { member, owner } = requireFixtures()
+    const group = await createGroup(owner, 'Realtime human removal group')
+    let reconnectClient: SupabaseClient | undefined
+
+    try {
+      await insertMembership(group.id, member.principalId)
+      await member.client.realtime.setAuth()
+      const currentSubscription = await subscribe(
+        member.client,
+        formatAgoraRealtimeTopic(group.id)
+      )
+
+      expect(currentSubscription.status).toBe('SUBSCRIBED')
+      await cleanupRealtimeClient(member.client)
+      const removal = await postHuman(owner, agoraRequestIdentifiers.removeMember, {
+        groupId: group.id,
+        principalId: member.principalId
+      })
+
+      expect(removal.status).toBe(200)
+      reconnectClient = await signInHumanFixture(member.email)
+      await reconnectClient.realtime.setAuth()
+      const reconnect = await subscribe(
+        reconnectClient,
+        formatAgoraRealtimeTopic(group.id)
+      )
+
+      expect(reconnect.status).not.toBe('SUBSCRIBED')
+    } finally {
+      await cleanupRealtimeClient(member.client)
+      if (reconnectClient) await cleanupRealtimeClient(reconnectClient)
     }
   })
 
