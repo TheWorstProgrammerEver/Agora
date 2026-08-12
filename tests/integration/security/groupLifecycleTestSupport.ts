@@ -135,10 +135,15 @@ export const insertMembership = async (groupId: string, principalId: string) => 
   }
 }
 
-export const selectCount = async (table: string, column: string, value: string) => {
+export const selectCount = async (
+  table: string,
+  column: string,
+  value: string,
+  selection = 'id'
+) => {
   const { count, error } = await groupLifecycleAdmin
     .from(table)
-    .select('id', { count: 'exact', head: true })
+    .select(selection, { count: 'exact', head: true })
     .eq(column, value)
 
   if (error) {

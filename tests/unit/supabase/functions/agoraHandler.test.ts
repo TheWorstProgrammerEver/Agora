@@ -4,6 +4,7 @@ import { agoraRequestIdentifiers } from '../../../../common/agoraRequestIdentifi
 import { MissingAuthenticationError } from '../../../../supabase/functions/agora/auth/authenticatePrincipal'
 import { createAgoraHandler } from '../../../../supabase/functions/agora/handler'
 import { AgoraGroupRequestError } from '../../../../supabase/functions/agora/handlers/groups/error'
+import { AgoraMessageRequestError } from '../../../../supabase/functions/agora/handlers/messages/error'
 
 const context = {
   database: { rpc: async () => ({ data: null, error: null }) },
@@ -112,6 +113,27 @@ describe('Agora HTTP handler', () => {
     expect(response.status).toBe(403)
     await expect(response.json()).resolves.toEqual({
       error: 'This group operation is not permitted.'
+    })
+  })
+
+  it('projects bounded message conflicts', async () => {
+    const handler = createAgoraHandler({
+      authenticate: vi.fn().mockResolvedValue(context),
+      createDispatcher: () => ({
+        dispatch: vi.fn().mockRejectedValue(
+          new AgoraMessageRequestError('This client message identifier is already in use.', 409)
+        )
+      }),
+      parseRequest: vi.fn().mockResolvedValue({
+        identifier: agoraRequestIdentifiers.sendMessage,
+        params: { clientMessageId: 'attempt', groupId: randomUUID(), text: 'Hello' }
+      })
+    })
+    const response = await handler(request())
+
+    expect(response.status).toBe(409)
+    await expect(response.json()).resolves.toEqual({
+      error: 'This client message identifier is already in use.'
     })
   })
 })

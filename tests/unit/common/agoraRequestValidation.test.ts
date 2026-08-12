@@ -1,4 +1,8 @@
 import { describe, expect, it } from 'vitest'
+import {
+  maximumClientMessageIdLength,
+  maximumMessageTextLength
+} from '../../../common/agoraMessageLimits'
 import { agoraRequestIdentifiers } from '../../../common/agoraRequestIdentifiers'
 import { isAgoraRequestParams } from '../../../common/agoraRequestValidation'
 
@@ -56,6 +60,26 @@ describe('Agora request parameter validation', () => {
     })).toBe(false)
     expect(isAgoraRequestParams(agoraRequestIdentifiers.createGroup, {
       name: 'x'.repeat(121)
+    })).toBe(false)
+  })
+
+  it('bounds message text and client identifiers without rejecting Unicode at the boundary', () => {
+    expect(isAgoraRequestParams(agoraRequestIdentifiers.sendMessage, {
+      ...validParams.sendMessage,
+      clientMessageId: 'i'.repeat(maximumClientMessageIdLength),
+      text: '🚀'.repeat(maximumMessageTextLength)
+    })).toBe(true)
+    expect(isAgoraRequestParams(agoraRequestIdentifiers.sendMessage, {
+      ...validParams.sendMessage,
+      clientMessageId: 'i'.repeat(maximumClientMessageIdLength + 1)
+    })).toBe(false)
+    expect(isAgoraRequestParams(agoraRequestIdentifiers.sendMessage, {
+      ...validParams.sendMessage,
+      text: 'x'.repeat(maximumMessageTextLength + 1)
+    })).toBe(false)
+    expect(isAgoraRequestParams(agoraRequestIdentifiers.sendMessage, {
+      ...validParams.sendMessage,
+      text: '   '
     })).toBe(false)
   })
 })
