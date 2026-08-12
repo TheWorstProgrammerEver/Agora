@@ -17,6 +17,7 @@ import {
   sequenceBefore
 } from '../../state/conversationStateUpdates'
 import { createId } from '../../utils/id'
+import { useActiveGroupRequest } from './useActiveGroupRequest'
 import { useConversationSynchronization } from './useConversationSynchronization'
 
 type FailedSend = {
@@ -36,6 +37,7 @@ export const useGroupConversation = (groupId: string) => {
   const loadState = useLoader()
   const historyState = useLoader()
   const actionState = useLoader()
+  const isActiveGroupRequest = useActiveGroupRequest(groupId)
 
   const applyMessages = useCallback((incoming: MessageDto[]) => {
     const incomingLatest = latestMessageSequence(incoming)
@@ -77,7 +79,7 @@ export const useGroupConversation = (groupId: string) => {
           return { page: loadedPage, unread: loadedUnread }
         })
 
-        if (generationRef.current !== generation) {
+        if (generationRef.current !== generation || !isActiveGroupRequest(groupId)) {
           return
         }
 
@@ -89,7 +91,9 @@ export const useGroupConversation = (groupId: string) => {
           : latestSequenceRef.current)
         setInitialized(true)
       } catch (error) {
-        if (generationRef.current === generation && isFunctionAccessDenied(error)) {
+        if (generationRef.current === generation
+          && isActiveGroupRequest(groupId)
+          && isFunctionAccessDenied(error)) {
           revokeAccess()
         }
       }
@@ -102,7 +106,7 @@ export const useGroupConversation = (groupId: string) => {
         generationRef.current += 1
       }
     }
-  }, [applyMessages, groupId, loadState.execute, revokeAccess])
+  }, [applyMessages, groupId, isActiveGroupRequest, loadState.execute, revokeAccess])
 
   const synchronization = useConversationSynchronization({
     accessRevoked,
@@ -124,14 +128,27 @@ export const useGroupConversation = (groupId: string) => {
         groupId,
         limit: defaultMessagePageSize
       }))
+
+      if (!isActiveGroupRequest(groupId)) {
+        return
+      }
+
       applyMessages(page.items)
       setHistoryCursor(page.nextCursor)
     } catch (error) {
-      if (isFunctionAccessDenied(error)) {
+      if (isActiveGroupRequest(groupId) && isFunctionAccessDenied(error)) {
         revokeAccess()
       }
     }
-  }, [accessRevoked, applyMessages, groupId, historyCursor, historyState.execute, revokeAccess])
+  }, [
+    accessRevoked,
+    applyMessages,
+    groupId,
+    historyCursor,
+    historyState.execute,
+    isActiveGroupRequest,
+    revokeAccess
+  ])
 
   const send = useCallback(async (text: string) => {
     const normalizedText = text.trim()
@@ -145,11 +162,20 @@ export const useGroupConversation = (groupId: string) => {
         groupId,
         text: pending.text
       }))
+
+      if (!isActiveGroupRequest(groupId)) {
+        return false
+      }
+
       applyMessages([message])
       setReadThroughSequence((current) => laterSequence(current, message.sequence))
       setFailedSend(undefined)
       return true
     } catch (error) {
+      if (!isActiveGroupRequest(groupId)) {
+        return false
+      }
+
       if (isFunctionAccessDenied(error)) {
         revokeAccess()
       } else {
@@ -158,25 +184,32 @@ export const useGroupConversation = (groupId: string) => {
 
       return false
     }
-  }, [actionState.execute, applyMessages, failedSend, groupId, revokeAccess])
+  }, [actionState.execute, applyMessages, failedSend, groupId, isActiveGroupRequest, revokeAccess])
 
   const acknowledgeRead = useCallback(async () => {
-    if (latestSequenceRef.current === '0') {
+    const throughSequence = latestSequenceRef.current
+
+    if (throughSequence === '0') {
       return
     }
 
     try {
       const watermark = await actionState.execute(() => markGroupRead({
         groupId,
-        throughSequence: latestSequenceRef.current
+        throughSequence
       }))
+
+      if (!isActiveGroupRequest(groupId)) {
+        return
+      }
+
       setReadThroughSequence((current) => laterSequence(current, watermark.sequence))
     } catch (error) {
-      if (isFunctionAccessDenied(error)) {
+      if (isActiveGroupRequest(groupId) && isFunctionAccessDenied(error)) {
         revokeAccess()
       }
     }
-  }, [actionState.execute, groupId, revokeAccess])
+  }, [actionState.execute, groupId, isActiveGroupRequest, revokeAccess])
 
   const unreadCount = useMemo(() => (
     messages.filter((message) => isMessageUnread(message, readThroughSequence)).length

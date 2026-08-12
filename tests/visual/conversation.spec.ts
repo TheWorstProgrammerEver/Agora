@@ -6,6 +6,7 @@ import type {
   MessageDto
 } from '../../common/agoraDtos'
 import { AgoraFunctionMockError, routeAgoraFunction } from './agoraFunctionMock'
+import { routeAgoraRealtime } from './agoraRealtimeMock'
 import { routeRuntimeConfig } from './runtimeConfig'
 import { cleanupVisualAccounts, createVisualAccount } from './visualAccount'
 
@@ -68,6 +69,7 @@ test('sends, paginates, acknowledges unread messages, and catches up after recon
   const sendClientIds: unknown[] = []
   let sendAttempts = 0
   let markedThrough: unknown
+  const realtime = await routeAgoraRealtime(page)
 
   await routeAgoraFunction(page, (identifier, params) => {
     if (identifier === 'listGroups') return { items: [summary] }
@@ -133,11 +135,19 @@ test('sends, paginates, acknowledges unread messages, and catches up after recon
   expect(sendClientIds).toHaveLength(2)
   expect(sendClientIds[0]).toBe(sendClientIds[1])
 
+  await expect.poll(realtime.joinedConnectionCount).toBe(1)
+  await expect(page.getByText('Live updates connected')).toBeVisible()
+  realtime.pauseJoinAcknowledgements()
+  await realtime.disconnectLatest()
+  await expect(page.getByText('Live updates interrupted · retrying')).toBeVisible()
+  await expect.poll(realtime.connectionCount).toBe(2)
+  await expect.poll(realtime.joinedConnectionCount).toBe(2)
+
   messages.push(message(5, 'Recovered after reconnect'))
-  await page.evaluate(() => {
-    window.dispatchEvent(new Event('online'))
-    window.dispatchEvent(new Event('online'))
-  })
+  realtime.acknowledgeLatestJoin()
+  realtime.sendAvailabilityHint(groupId, '5')
+  realtime.sendAvailabilityHint(groupId, '5')
+  await expect(page.getByText('Live updates connected')).toBeVisible()
   await expect(page.getByText('Recovered after reconnect')).toHaveCount(1)
 
   await page.setViewportSize({ width: 360, height: 780 })

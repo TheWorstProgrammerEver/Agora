@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react'
 import { Bot, MailPlus, Trash2, UserMinus } from 'lucide-react'
+import { useParams } from 'react-router-dom'
 import { AppDialog, DialogFooterActions } from '../../../lib/ui/AppDialog/AppDialog'
 import { Button } from '../../../lib/ui/Button/Button'
 import { ComponentRoleContext } from '../../../lib/ui/ComponentRoleContext/ComponentRoleContext'
@@ -16,7 +17,7 @@ const principalDescription = (kind: 'agent' | 'human', role: 'member' | 'owner')
   `${kind === 'agent' ? 'Agent' : 'Human'} · ${role === 'owner' ? 'Owner' : 'Member'}`
 )
 
-export const GroupScreen = () => {
+const GroupScreenContent = () => {
   const viewModel = useGroupScreenViewModel()
   const [inviteEmail, setInviteEmail] = useState('')
   const [agentPrincipalId, setAgentPrincipalId] = useState('')
@@ -197,4 +198,10 @@ export const GroupScreen = () => {
       </AppDialog>
     </section>
   )
+}
+
+export const GroupScreen = () => {
+  const { groupId = '' } = useParams()
+
+  return <GroupScreenContent key={groupId} />
 }

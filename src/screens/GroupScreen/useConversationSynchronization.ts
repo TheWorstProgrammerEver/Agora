@@ -5,6 +5,7 @@ import { getGroupMessages } from '../../data/agora/agoraClient'
 import { subscribeToGroupAvailability } from '../../data/agora/groupAvailability'
 import { isFunctionAccessDenied } from '../../data/supabaseFunctionInvokerRequestHandler'
 import { latestMessageSequence } from '../../state/conversationStateUpdates'
+import { useActiveGroupRequest } from './useActiveGroupRequest'
 
 const maximumCatchUpPages = 1_000
 
@@ -30,7 +31,8 @@ export const useConversationSynchronization = ({
   const [syncError, setSyncError] = useState<string>()
   const generationRef = useRef(0)
   const reconcileRequestedRef = useRef(false)
-  const reconcilePromiseRef = useRef<Promise<void> | undefined>(undefined)
+  const reconcilePromiseRef = useRef<{ groupId: string, promise: Promise<void> } | undefined>(undefined)
+  const isActiveGroupRequest = useActiveGroupRequest(groupId)
 
   useEffect(() => {
     generationRef.current += 1
@@ -41,13 +43,13 @@ export const useConversationSynchronization = ({
   }, [groupId])
 
   const requestReconciliation = useCallback(() => {
-    if (!initialized || accessRevoked) {
+    if (!initialized || accessRevoked || !isActiveGroupRequest(groupId)) {
       return
     }
 
     reconcileRequestedRef.current = true
 
-    if (reconcilePromiseRef.current) {
+    if (reconcilePromiseRef.current?.groupId === groupId) {
       return
     }
 
@@ -74,15 +76,21 @@ export const useConversationSynchronization = ({
               groupId,
               limit: maximumMessagePageSize
             })
+            if (generationRef.current !== generation || !isActiveGroupRequest(groupId)) {
+              return
+            }
+
             applyMessages(page.items)
             cursor = latestMessageSequence(page.items) ?? cursor
             hasMore = Boolean(page.nextCursor)
           }
         }
 
-        setSyncError(undefined)
+        if (isActiveGroupRequest(groupId)) {
+          setSyncError(undefined)
+        }
       } catch (error) {
-        if (generationRef.current !== generation) {
+        if (generationRef.current !== generation || !isActiveGroupRequest(groupId)) {
           return
         }
 
@@ -92,16 +100,29 @@ export const useConversationSynchronization = ({
           setSyncError(error instanceof Error ? error.message : 'Conversation catch-up failed.')
         }
       } finally {
-        if (generationRef.current === generation) {
+        if (generationRef.current === generation && isActiveGroupRequest(groupId)) {
           setSyncBusy(false)
         }
       }
     }
 
-    reconcilePromiseRef.current = reconcile().finally(() => {
-      reconcilePromiseRef.current = undefined
+    const promise = reconcile()
+    const reconciliation = { groupId, promise }
+    reconcilePromiseRef.current = reconciliation
+    void promise.finally(() => {
+      if (reconcilePromiseRef.current === reconciliation) {
+        reconcilePromiseRef.current = undefined
+      }
     })
-  }, [accessRevoked, applyMessages, groupId, initialized, latestSequenceRef, revokeAccess])
+  }, [
+    accessRevoked,
+    applyMessages,
+    groupId,
+    initialized,
+    isActiveGroupRequest,
+    latestSequenceRef,
+    revokeAccess
+  ])
 
   useEffect(() => {
     if (!initialized || accessRevoked) {
@@ -110,16 +131,32 @@ export const useConversationSynchronization = ({
 
     const disconnect = subscribeToGroupAvailability(groupId, {
       onConnected: () => {
+        if (!isActiveGroupRequest(groupId)) {
+          return
+        }
+
         setRealtimeState('connected')
         requestReconciliation()
       },
       onDisconnected: () => {
+        if (!isActiveGroupRequest(groupId)) {
+          return
+        }
+
         setRealtimeState('interrupted')
         requestReconciliation()
       },
-      onHint: () => requestReconciliation()
+      onHint: () => {
+        if (isActiveGroupRequest(groupId)) {
+          requestReconciliation()
+        }
+      }
     })
     const reconcileOnline = () => {
+      if (!isActiveGroupRequest(groupId)) {
+        return
+      }
+
       setRealtimeState('connecting')
       requestReconciliation()
     }
@@ -129,7 +166,7 @@ export const useConversationSynchronization = ({
       window.removeEventListener('online', reconcileOnline)
       disconnect()
     }
-  }, [accessRevoked, groupId, initialized, requestReconciliation])
+  }, [accessRevoked, groupId, initialized, isActiveGroupRequest, requestReconciliation])
 
   return { realtimeState, syncBusy, syncError }
 }
