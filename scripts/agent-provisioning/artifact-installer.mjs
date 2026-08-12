@@ -145,15 +145,15 @@ export const installRunnerArtifact = async ({
   const artifactInput = path.resolve(artifact)
   const sourceRoot = await realpath(artifactInput)
   const sourceMetadata = await lstat(artifactInput)
-  if (sourceRoot !== artifactInput || !sourceMetadata.isDirectory() || sourceMetadata.isSymbolicLink()) {
+  if (!sourceMetadata.isDirectory() || sourceMetadata.isSymbolicLink()) {
     throw new Error('Runner artifact source path is not canonical.')
   }
   const sourceVerification = await verifyArtifact(sourceRoot)
   if (sourceVerification.digest !== digest) throw new Error('Runner artifact digest does not match.')
 
   const configInput = path.resolve(config)
+  await requireRegular(configInput, 'Runner public configuration', { privateFile: true })
   const configSource = await realpath(configInput)
-  if (configSource !== configInput) throw new Error('Runner public configuration path is not canonical.')
   await requireRegular(configSource, 'Runner public configuration', { privateFile: true })
   const publicConfig = parseEnvironment(await readFile(configSource, 'utf8'))
   const releaseRoot = path.join(roots.releases, digest)

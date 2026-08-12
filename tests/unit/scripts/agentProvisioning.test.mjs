@@ -54,6 +54,32 @@ const configContent = [
 ].join('\n') + '\n'
 
 describe('runner artifact installation', () => {
+  it('rejects a symlink used as the artifact source argument', async () => {
+    const fixture = await createFixture()
+    const artifact = path.join(fixture, 'artifact')
+    const artifactLink = path.join(fixture, 'artifact-link')
+    const config = path.join(fixture, 'runner.conf')
+    await mkdir(artifact)
+    const digest = await createArtifact(artifact)
+    await symlink(artifact, artifactLink)
+    await writeFile(config, configContent, { mode: 0o600 })
+
+    await expect(installRunnerArtifact({
+      artifact: artifactLink,
+      config,
+      digest,
+      ownerUid: process.getuid(),
+      roots: {
+        config: path.join(fixture, 'etc/agora-agent-runner'),
+        custodyLauncher: path.join(fixture, 'usr/local/sbin/agora-agent-custody'),
+        launcher: path.join(fixture, 'usr/local/bin/agora-agent-runner'),
+        releases: path.join(fixture, 'opt/agora/releases'),
+        systemd: path.join(fixture, 'etc/systemd/system')
+      },
+      service: 'agora-agent-runner@test.service'
+    })).rejects.toThrow('source path is not canonical')
+  })
+
   it('installs a verified release with a regular final-path launcher', async () => {
     const fixture = await createFixture()
     const artifact = path.join(fixture, 'artifact')
