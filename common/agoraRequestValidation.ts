@@ -11,6 +11,7 @@ import {
 } from './agoraGroupLimits.ts'
 import {
   maximumClientMessageIdLength,
+  maximumMessagePageSize,
   maximumMessageTextLength
 } from './agoraMessageLimits.ts'
 
@@ -41,6 +42,12 @@ const isBoundedNonEmptyString = (value: unknown, maximumLength: number): value i
 )
 const isPositiveInteger = (value: unknown): value is number => (
   Number.isInteger(value) && Number(value) > 0
+)
+const isNonnegativeMessageSequence = (value: unknown): value is string => (
+  isString(value) && /^(?:0|[1-9]\d*)$/.test(value)
+)
+const isPositiveMessageSequence = (value: unknown): value is string => (
+  isString(value) && /^[1-9]\d*$/.test(value)
 )
 const isUuid = (value: unknown): value is string => (
   isString(value)
@@ -107,7 +114,9 @@ const validators = {
         ['afterSequence', 'aroundSequence', 'beforeSequence', 'limit']
       )
       || !isUuid(value.groupId)
-      || (value.limit !== undefined && !isPositiveInteger(value.limit))) {
+      || (value.limit !== undefined && (
+        !isPositiveInteger(value.limit) || value.limit > maximumMessagePageSize
+      ))) {
       return false
     }
 
@@ -117,14 +126,22 @@ const validators = {
       value.beforeSequence
     ].filter((window) => window !== undefined)
 
-    return windows.length <= 1 && windows.every(isNonEmptyString)
+    if (windows.length > 1) {
+      return false
+    }
+
+    return (value.afterSequence === undefined || isNonnegativeMessageSequence(value.afterSequence))
+      && (value.aroundSequence === undefined || isPositiveMessageSequence(value.aroundSequence))
+      && (value.beforeSequence === undefined || isPositiveMessageSequence(value.beforeSequence))
   },
   [agoraRequestIdentifiers.getUnreadMessages]: (value) => (
     isObject(value)
     && hasExactKeys(value, ['groupId'], ['afterSequence', 'limit'])
     && isUuid(value.groupId)
-    && (value.afterSequence === undefined || isNonEmptyString(value.afterSequence))
-    && (value.limit === undefined || isPositiveInteger(value.limit))
+    && (value.afterSequence === undefined || isNonnegativeMessageSequence(value.afterSequence))
+    && (value.limit === undefined || (
+      isPositiveInteger(value.limit) && value.limit <= maximumMessagePageSize
+    ))
   ),
   [agoraRequestIdentifiers.inviteHuman]: (value) => (
     isObject(value)
@@ -149,7 +166,7 @@ const validators = {
     isObject(value)
     && hasExactKeys(value, ['groupId', 'throughSequence'])
     && isUuid(value.groupId)
-    && isNonEmptyString(value.throughSequence)
+    && isPositiveMessageSequence(value.throughSequence)
   ),
   [agoraRequestIdentifiers.rejectInvitation]: isInvitationIdParams,
   [agoraRequestIdentifiers.removeMember]: (value) => (

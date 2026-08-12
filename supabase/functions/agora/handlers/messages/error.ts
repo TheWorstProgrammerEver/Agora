@@ -23,7 +23,9 @@ export const throwMessageDatabaseError = (error: unknown): never => {
   }
 
   if (code === '22001'
+    || code === '22003'
     || code === '22023'
+    || code === '22P02'
     || code === '23514') {
     throw new AgoraMessageRequestError('Message request parameters are invalid.', 400)
   }

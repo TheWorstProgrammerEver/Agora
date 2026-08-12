@@ -87,8 +87,11 @@ describe.sequential('anonymous health endpoint', () => {
       { allowed: true, function_name: 'current_principal_id' },
       { allowed: true, function_name: 'current_principal_is_group_member' },
       { allowed: true, function_name: 'get_agora_group' },
+      { allowed: true, function_name: 'get_agora_group_messages' },
+      { allowed: true, function_name: 'get_agora_unread_messages' },
       { allowed: true, function_name: 'list_agora_group_members' },
       { allowed: true, function_name: 'list_agora_groups' },
+      { allowed: true, function_name: 'mark_agora_group_read' },
       { allowed: true, function_name: 'send_agora_message' }
     ])
     expect(healthGrants.rows).toEqual([{
@@ -98,6 +101,7 @@ describe.sequential('anonymous health endpoint', () => {
     }])
     expect(tables.rows).toEqual([
       { privilege_type: 'SELECT', table_name: 'groups' },
+      { privilege_type: 'SELECT', table_name: 'membership_read_watermarks' },
       { privilege_type: 'SELECT', table_name: 'memberships' },
       { privilege_type: 'SELECT', table_name: 'messages' },
       { privilege_type: 'SELECT', table_name: 'principals' }
