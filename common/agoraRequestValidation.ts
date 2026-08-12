@@ -9,6 +9,10 @@ import {
   maximumInvitationListPageSize,
   maximumMemberListPageSize
 } from './agoraGroupLimits.ts'
+import {
+  maximumClientMessageIdLength,
+  maximumMessageTextLength
+} from './agoraMessageLimits.ts'
 
 type ParamsValidator = (value: unknown) => boolean
 
@@ -31,6 +35,9 @@ const hasExactKeys = (
 const isString = (value: unknown): value is string => typeof value === 'string'
 const isNonEmptyString = (value: unknown): value is string => (
   isString(value) && value.trim().length > 0
+)
+const isBoundedNonEmptyString = (value: unknown, maximumLength: number): value is string => (
+  isNonEmptyString(value) && [...value].length <= maximumLength
 )
 const isPositiveInteger = (value: unknown): value is number => (
   Number.isInteger(value) && Number(value) > 0
@@ -154,9 +161,9 @@ const validators = {
   [agoraRequestIdentifiers.sendMessage]: (value) => (
     isObject(value)
     && hasExactKeys(value, ['clientMessageId', 'groupId', 'text'])
-    && isNonEmptyString(value.clientMessageId)
+    && isBoundedNonEmptyString(value.clientMessageId, maximumClientMessageIdLength)
     && isUuid(value.groupId)
-    && isNonEmptyString(value.text)
+    && isBoundedNonEmptyString(value.text, maximumMessageTextLength)
   )
 } satisfies Record<AgoraRequestIdentifier, ParamsValidator>
 

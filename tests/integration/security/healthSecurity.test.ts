@@ -47,7 +47,7 @@ afterAll(async () => {
 })
 
 describe.sequential('anonymous health endpoint', () => {
-  it('limits anonymous database grants to principal resolution and member queries', async () => {
+  it('limits anonymous database grants to principal resolution and active-member operations', async () => {
     const functions = await database.query<{
       allowed: boolean
       function_name: string
@@ -88,7 +88,8 @@ describe.sequential('anonymous health endpoint', () => {
       { allowed: true, function_name: 'current_principal_is_group_member' },
       { allowed: true, function_name: 'get_agora_group' },
       { allowed: true, function_name: 'list_agora_group_members' },
-      { allowed: true, function_name: 'list_agora_groups' }
+      { allowed: true, function_name: 'list_agora_groups' },
+      { allowed: true, function_name: 'send_agora_message' }
     ])
     expect(healthGrants.rows).toEqual([{
       anonymous: false,
@@ -98,6 +99,7 @@ describe.sequential('anonymous health endpoint', () => {
     expect(tables.rows).toEqual([
       { privilege_type: 'SELECT', table_name: 'groups' },
       { privilege_type: 'SELECT', table_name: 'memberships' },
+      { privilege_type: 'SELECT', table_name: 'messages' },
       { privilege_type: 'SELECT', table_name: 'principals' }
     ])
   })
