@@ -47,6 +47,18 @@ maps database errors to `503 {"ok":false}`, and applies an independent
 per-worker request budget before database access. See `README.ENV.md` for
 deployment variables, timeout bounds, and monitor retry guidance.
 
+## Agent API Skill
+
+Agora's anonymous `GET /skill/codex` contract is deployed by Supabase at
+`/functions/v1/skill/codex`. It returns a deterministic versioned Codex skill
+archive and strong `ETag` without accepting credentials. The archive contains
+`agora/SKILL.md`, the generated version-1 dispatcher reference, operational
+guidance, and contract-tested examples.
+
+Run `npm run generate:agent-skill` after changing the shared request/response
+contract or a file under `agent-skill/agora`. `npm run check:agent-skill` and
+the unit suite reject generated-reference or archive drift.
+
 ## Shared Request Contract
 
 `common` owns the versioned Agora request identifiers, request/response DTOs, and typed envelope. `src/data/agora` maps those contracts to the browser-side Supabase function invoker. `supabase/functions/agora` imports the same contract and the shared `lib/dispatch` implementation.
