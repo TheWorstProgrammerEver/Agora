@@ -179,14 +179,18 @@ const message = (sequence, text) => ({
 
 const startHandlerTurn = async ({
   onBootstrapStarted,
+  onBootstrapStarting,
   onThreadReady,
   onTurnStarted,
+  onTurnStarting,
   threadId
 }) => {
   if (!threadId) {
+    await onBootstrapStarting()
     await onBootstrapStarted(processIdentity)
     await onThreadReady(randomUUID())
   }
+  await onTurnStarting()
   await onTurnStarted(processIdentity)
 }
 
@@ -269,9 +273,11 @@ describe('Agora agent runner orchestration', () => {
     const handler = async (options) => {
       observedThreadIds.push(options.threadId)
       if (!options.threadId) {
+        await options.onBootstrapStarting()
         await options.onBootstrapStarted(processIdentity)
         await options.onThreadReady(expectedThreadId)
       }
+      await options.onTurnStarting()
       await options.onTurnStarted(processIdentity)
       return { messages: [], version: 1 }
     }
@@ -449,6 +455,42 @@ describe('Agora agent runner orchestration', () => {
       cursor: '0',
       lease: { attempt: 1, failureCode: 'turn_indeterminate', phase: 'failed' }
     })
+  })
+
+  it('does not replay a bootstrap that may have produced a tool effect', async () => {
+    const api = new FakeAgora([message(1, 'Bootstrap interruption fixture')])
+    let calls = 0
+    const first = await createFixture({
+      api,
+      handler: async (options) => {
+        calls += 1
+        await options.onBootstrapStarting()
+        await options.onBootstrapStarted(processIdentity)
+        throw new HandlerExecutionError('handler_failed')
+      }
+    })
+
+    await expect(first.runner.runOnce(new AbortController().signal))
+      .rejects.toMatchObject({ code: 'handler_failed' })
+    expect(calls).toBe(1)
+    expect(api.markCalls).toEqual([])
+    expect((await first.store.read()).groups[groupId]).toMatchObject({
+      cursor: '0',
+      lease: { failureCode: 'turn_indeterminate', phase: 'failed' }
+    })
+
+    const resumed = new AgoraRunner({
+      api,
+      config: configFor(first.root),
+      handler: async () => { calls += 1 },
+      logger,
+      store: new DurableRunnerStore(first.root)
+    })
+    await resumed.initialize()
+    await expect(resumed.runOnce(new AbortController().signal))
+      .rejects.toMatchObject({ code: 'handler_failed' })
+    expect(calls).toBe(1)
+    expect(api.markCalls).toEqual([])
   })
 
   it('settles cancellation without acknowledgement and requires effect reconciliation', async () => {

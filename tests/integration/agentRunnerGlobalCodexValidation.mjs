@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { handlerPermissionConfig } from '../../scripts/agent-runner/codex-handler.mjs'
 import { resolveCodexRuntime } from '../../scripts/agent-runner/codex-runtime.mjs'
@@ -11,11 +11,13 @@ if (!codexBin || !isAbsolute(codexBin)) {
   throw new Error('AGORA_RUNNER_TEST_CODEX_BIN must name an absolute installed Codex launcher.')
 }
 
-const root = await mkdtemp(join(tmpdir(), 'agora-global-codex-live-'))
+const root = await mkdtemp(join(homedir(), '.agora-global-codex-live-'))
 const codexHome = join(root, 'codex-home')
 const credentialDirectory = join(root, 'credentials')
 const credentialPath = join(credentialDirectory, 'agora-agent-key')
 const workspace = join(root, 'workspace')
+const groupWorkspace = join(workspace, '.agora-inbox', 'principal', 'group')
+const siblingWorkspace = join(workspace, '.agora-inbox', 'principal', 'other-group')
 const stateDirectory = join(root, 'state')
 const contextCliPath = join(process.cwd(), 'scripts/agent-runner/context-cli.mjs')
 
@@ -24,7 +26,10 @@ try {
     mkdir(join(codexHome, 'sessions'), { mode: 0o700, recursive: true }),
     mkdir(credentialDirectory, { mode: 0o700 }),
     mkdir(stateDirectory, { mode: 0o700 }),
-    mkdir(join(workspace, '.git'), { mode: 0o700, recursive: true })
+    mkdir(join(workspace, 'project'), { mode: 0o700, recursive: true }),
+    mkdir(join(workspace, 'new-project'), { mode: 0o700, recursive: true }),
+    mkdir(groupWorkspace, { mode: 0o700, recursive: true }),
+    mkdir(siblingWorkspace, { mode: 0o700, recursive: true })
   ])
   await Promise.all([
     writeFile(credentialPath, 'EXAMPLE_DENIED_AGENT_KEY', { mode: 0o400 }),
@@ -34,7 +39,8 @@ try {
     writeFile(join(stateDirectory, 'other-group-plan.json'), 'DENIED_GROUP_PLAN', {
       mode: 0o600
     }),
-    writeFile(join(workspace, 'AGENTS.md'), 'DENIED_INSTRUCTION_MUTATION', { mode: 0o600 })
+    writeFile(join(workspace, 'AGENTS.md'), 'DENIED_INSTRUCTION_MUTATION', { mode: 0o600 }),
+    writeFile(join(siblingWorkspace, 'context.txt'), 'DENIED_OTHER_GROUP', { mode: 0o600 })
   ])
   const config = {
     codexBin,
@@ -53,13 +59,18 @@ try {
 
   execFileSync(runtime.executable, [
     'sandbox',
-    ...handlerPermissionConfig(config).flatMap((value) => ['-c', value]),
+    ...handlerPermissionConfig(config, { protectedPaths: [siblingWorkspace] })
+      .flatMap((value) => ['-c', value]),
     '--permission-profile', 'agora-inbox',
-    '--cd', workspace,
+    '--cd', groupWorkspace,
     '--',
     '/bin/sh', '-c', (
-      'test ! -r "$1" && test -r "$2" && test ! -r "$3" '
-      + '&& test ! -r "$4" && test ! -r "$5" && touch "$6"'
+      'test ! -r "$1" || exit 21; test -r "$2" || exit 22; '
+      + 'test ! -r "$3" || exit 23; test ! -r "$4" || exit 24; '
+      + 'test ! -r "$5" || exit 25; ! touch "$6" 2>/dev/null || exit 26; '
+      + '! touch "$7" 2>/dev/null || exit 27; '
+      + '! mkdir -p "$8" 2>/dev/null || exit 28; touch "$9" || exit 29; '
+      + 'test ! -r "$10" || exit 30'
     ),
     'agora-global-codex-check',
     credentialPath,
@@ -67,7 +78,11 @@ try {
     join(codexHome, 'sessions', 'other-group.jsonl'),
     join(workspace, 'AGENTS.md'),
     join(stateDirectory, 'other-group-plan.json'),
-    join(workspace, 'ordinary-output')
+    join(workspace, 'project', 'AGENTS.md'),
+    join(workspace, 'new-project', 'AGENTS.override.md'),
+    join(workspace, 'new-project', '.codex', 'rules'),
+    join(groupWorkspace, 'ordinary-output'),
+    join(siblingWorkspace, 'context.txt')
   ], {
     env: {
       CODEX_HOME: codexHome,

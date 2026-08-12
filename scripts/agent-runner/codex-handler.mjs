@@ -1,11 +1,13 @@
 import { spawn } from 'node:child_process'
-import { constants, existsSync } from 'node:fs'
+import { constants } from 'node:fs'
 import { open, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { validateHandlerPlan } from './api-validation.mjs'
 import { RunnerCanceledError, throwIfAborted } from './abort.mjs'
 import { resolveCodexRuntime } from './codex-runtime.mjs'
+import { prepareGroupWorkspace } from './group-workspace.mjs'
+import { HandlerExecutionError } from './handler-error.mjs'
 import {
   durableProcessIdentity,
   terminateCurrentHandlerGroup
@@ -17,12 +19,7 @@ const apiCliPath = fileURLToPath(new URL('./context-cli.mjs', import.meta.url))
 const maximumEventBytes = 256 * 1024
 const transportEnvironmentPattern = /^(?:AGORA_RUNNER_|CREDENTIALS_DIRECTORY$)/
 
-export class HandlerExecutionError extends Error {
-  constructor(code) {
-    super(`Agora handler failed (${code}).`)
-    this.code = code
-  }
-}
+export { HandlerExecutionError } from './handler-error.mjs'
 
 const handlerRuntime = (codexBin) => {
   try {
@@ -32,10 +29,12 @@ const handlerRuntime = (codexBin) => {
   }
 }
 
-const protectedCodexPaths = (config) => {
+const protectedCodexPaths = (config, protectedPaths) => {
   const codexHome = config.codexHome
   const candidates = [
+    [config.workspace, 'read'],
     [join(config.workspace, 'AGENTS.md'), 'deny'],
+    [join(config.workspace, 'AGENTS.override.md'), 'deny'],
     [join(codexHome, 'config.toml'), 'read'],
     [join(codexHome, 'plugins'), 'read'],
     [join(codexHome, 'rules'), 'read'],
@@ -49,17 +48,16 @@ const protectedCodexPaths = (config) => {
     [join(codexHome, 'thread-writer-locks'), 'deny'],
     [join(codexHome, 'thread_history_1.sqlite'), 'deny'],
     [config.credentialDirectory, 'deny'],
-    [config.stateDirectory, 'deny']
+    [config.stateDirectory, 'deny'],
+    ...protectedPaths.map((path) => [path, 'deny'])
   ]
-  return new Map(candidates.filter(([path]) => (
-    typeof path === 'string' && existsSync(path)
-  )))
+  return new Map(candidates.filter(([path]) => typeof path === 'string'))
 }
 
-const filesystemPermissionConfig = (config) => {
+const filesystemPermissionConfig = (config, protectedPaths) => {
   const entries = new Map([
     [':root', 'read'],
-    ...protectedCodexPaths(config)
+    ...protectedCodexPaths(config, protectedPaths)
   ])
   const fields = Array.from(entries, ([path, access]) => (
     `${JSON.stringify(path)} = ${JSON.stringify(access)}`
@@ -67,12 +65,12 @@ const filesystemPermissionConfig = (config) => {
   return `permissions.agora-inbox.filesystem={ ${fields.join(', ')} }`
 }
 
-export const handlerPermissionConfig = (config) => [
+export const handlerPermissionConfig = (config, { protectedPaths = [] } = {}) => [
   'approval_policy="never"',
   'default_permissions="agora-inbox"',
   'permissions.agora-inbox.description="Host agent permissions with Agora isolation"',
   'permissions.agora-inbox.extends=":workspace"',
-  filesystemPermissionConfig(config),
+  filesystemPermissionConfig(config, protectedPaths),
   'permissions.agora-inbox.network.enabled=true',
   'permissions.agora-inbox.network.allow_local_binding=false',
   'permissions.agora-inbox.network.domains={ "*" = "allow", "127.0.0.1" = "allow", "localhost" = "allow" }',
@@ -100,25 +98,29 @@ const assertPermissionProfileCompatibility = async (config) => {
   }
 }
 
-const commonCodexArgs = (config) => [
+const commonCodexArgs = (config, options) => [
   '--strict-config',
-  ...handlerPermissionConfig(config).flatMap((value) => ['-c', value]),
+  ...handlerPermissionConfig(config, options).flatMap((value) => ['-c', value]),
   '--skip-git-repo-check'
 ]
 
-export const buildBootstrapArgs = ({ config }) => [
+export const buildBootstrapArgs = ({
+  config,
+  protectedPaths = [],
+  workspace = config.workspace
+}) => [
   'exec',
   '--json',
-  ...commonCodexArgs(config),
-  '--cd', config.workspace,
+  ...commonCodexArgs(config, { protectedPaths }),
+  '--cd', workspace,
   '-'
 ]
 
-export const buildCodexArgs = ({ config, outputPath, threadId }) => [
+export const buildCodexArgs = ({ config, outputPath, protectedPaths = [], threadId }) => [
   'exec',
   'resume',
   '--json',
-  ...commonCodexArgs(config),
+  ...commonCodexArgs(config, { protectedPaths }),
   '--output-schema', config.handlerOutputSchemaPath,
   '--output-last-message', outputPath,
   threadId,
@@ -200,15 +202,19 @@ const runCodexProcess = async ({
   config,
   environment,
   onHeartbeat,
+  onStarting,
   onStarted,
   prompt,
   signal,
   terminationOptions,
+  workspace,
   captureOutput = false
 }) => {
   throwIfAborted(signal)
+  await onStarting()
+  throwIfAborted(signal)
   const child = spawn(config.codexBin, args, {
-    cwd: config.workspace,
+    cwd: workspace,
     detached: true,
     env: environment,
     stdio: ['pipe', captureOutput ? 'pipe' : 'ignore', 'ignore']
@@ -304,14 +310,17 @@ export const runCodexHandler = async ({
   context,
   contextAccess,
   onBootstrapStarted,
+  onBootstrapStarting,
   onHeartbeat,
   onThreadReady,
   onTurnStarted,
+  onTurnStarting,
   outputPath,
   prompt,
   signal,
   terminationOptions,
-  threadId
+  threadId,
+  workspaceId
 }) => {
   throwIfAborted(signal)
   if (!contextAccess
@@ -327,20 +336,27 @@ export const runCodexHandler = async ({
     codexRuntime
   }
   const environment = buildHandlerEnvironment(config, context, contextAccess)
+  const groupWorkspace = await prepareGroupWorkspace(config, context, workspaceId)
   let boundThreadId = threadId
 
   if (!boundThreadId) {
     const bootstrapPrompt = await readFile(config.threadBootstrapPromptPath, 'utf8')
     const events = await runCodexProcess({
-      args: buildBootstrapArgs({ config: resolvedConfig }),
+      args: buildBootstrapArgs({
+        config: resolvedConfig,
+        protectedPaths: groupWorkspace.protectedPaths,
+        workspace: groupWorkspace.workspace
+      }),
       captureOutput: true,
       config: resolvedConfig,
       environment,
       onHeartbeat,
+      onStarting: onBootstrapStarting,
       onStarted: onBootstrapStarted,
       prompt: bootstrapPrompt,
       signal,
-      terminationOptions
+      terminationOptions,
+      workspace: groupWorkspace.workspace
     })
     boundThreadId = threadIdFromEvents(events)
     await onThreadReady(boundThreadId)
@@ -356,15 +372,18 @@ export const runCodexHandler = async ({
     args: buildCodexArgs({
       config: resolvedConfig,
       outputPath,
+      protectedPaths: groupWorkspace.protectedPaths,
       threadId: boundThreadId
     }),
     config: resolvedConfig,
     environment,
     onHeartbeat,
+    onStarting: onTurnStarting,
     onStarted: onTurnStarted,
     prompt,
     signal,
-    terminationOptions
+    terminationOptions,
+    workspace: groupWorkspace.workspace
   })
   return await readHandlerOutput(outputPath)
 }

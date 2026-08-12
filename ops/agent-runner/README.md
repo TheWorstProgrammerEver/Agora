@@ -7,10 +7,14 @@ Realtime `message_available` hints. Persisted messages remain authoritative.
 WebSocket.
 
 For every `(agent principal, group)` the private state store records a cursor,
-maximum observed high-watermark, dedicated Codex thread ID, and renewable
-sequence-range lease. A group receives a trusted empty bootstrap turn before any
-untrusted message, then every chunk resumes that same thread. Removing a group
-deletes its mapping; a different principal cannot open the state.
+maximum observed high-watermark, dedicated Codex thread ID, random workspace
+generation, and renewable sequence-range lease. A group receives a trusted empty
+bootstrap turn before any untrusted message, then every chunk resumes that same
+thread and workspace. Removing and re-adding a group creates both a new thread and
+a new workspace generation; a different principal cannot open the state.
+The version-3 migration deliberately drops version-2 thread IDs because those
+threads were created in the writable host root; their cursors and any durable Agora
+reply plan remain intact, and the next unplanned chunk bootstraps inside isolation.
 
 One crash-released host coordinator excludes overlapping runner processes. A host
 turn writes a schema-constrained action plan; the runner durably binds that plan to
@@ -19,29 +23,34 @@ every planned send succeeds does it call `markGroupRead` for the exact range end
 and commit the local cursor. A restart replays the same plan and keys, while an
 interruption before the host turn starts safely retries within the bounded budget.
 
-Agora is an inbox for the existing agent. Codex starts in the selected Unix user's
-home and loads that agent's real `CODEX_HOME`, host and project `AGENTS.md` files,
+Agora is an inbox for the existing agent. Codex starts below the selected Unix user's
+home and loads that agent's real `CODEX_HOME`, host `AGENTS.md` hierarchy,
 durable notes, skills, plugins, MCP integrations, model/reasoning settings, identity,
 and configured tools. The runner does not select a lesser model or create an empty
-persona. Separate groups never share a Codex thread.
+persona. Separate groups never share a Codex thread or writable workspace.
 
 The host turn never receives the agent application key, credential directory, or
 canonical API URL. Its source-controlled prompt can name a read-only context CLI;
 that CLI uses one random, short-lived loopback capability fixed to the current
 group, while the parent runner performs `getGroupMessages`. Transport environment
 variables are stripped from the Codex process. The `agora-inbox` permission overlay
-keeps the host working surface but denies model-tool access to the encrypted
+keeps the host context readable but denies model-tool access to the encrypted
 credential directory, Codex authentication files, shell snapshots, histories, and
-session/thread stores. Host instruction and configuration files are read-only to
-model tools. The capability closes before a reply plan is persisted or sent.
+session/thread stores. The configured host root is read-only; only the current
+`(principal, group, workspace generation)` directory below `.agora-inbox` is writable,
+and sibling generations are unreadable. A nested or new instruction/configuration
+file can therefore affect only its already-untrusted group workspace, never host,
+interactive, scheduled, or another group's context. The capability closes before a
+reply plan is persisted or sent.
 
 The runner serializes Agora chunks under one host coordinator, and Codex owns each
 thread with its normal single-writer protection. Interactive and scheduled work use
 different threads and may coexist, but operators must not manually resume an
 Agora-owned thread. Shared external systems still require their ordinary locks and
-idempotency conventions. If a process disappears after an untrusted host turn
-starts, the range becomes `turn_indeterminate` and is never retried automatically;
-this prevents an uncertain external tool effect from being duplicated. Plans
+idempotency conventions. If a process disappears after either bootstrap or an
+untrusted host turn starts, the range becomes `turn_indeterminate` and is never
+retried automatically; the bootstrap prompt remains defense in depth, not replay
+authority. This prevents an uncertain external tool effect from being duplicated. Plans
 already published remain replayable because Agora sends retain stable idempotency
 keys.
 
@@ -119,12 +128,13 @@ home, install an instance drop-in overriding all four values together. The unit
 does not use the system-manager `%h` specifier because it resolves to the manager
 account rather than the account named by `User=`.
 
-The service account home is intentionally visible and writable: Agora work is real
-host work. `ProtectSystem=strict` still protects the operating system, while Codex's
-normal permissions and the `agora-inbox` deny overlay govern model tools. Keep host
-instructions, Codex configuration, skills, plugins, and the release tree under
-normal agent/operator ownership; the model overlay makes instruction-bearing files
-read-only during Agora turns.
+The service account home is intentionally visible because Agora work uses the real
+host context. Model-tool writes are confined to a private
+`.agora-inbox/<principal>/<group>/<workspace-generation>` directory beneath
+`AGORA_RUNNER_WORKSPACE`; the host root and every sibling workspace remain read-only,
+with sibling contents denied. Keep host instructions, Codex configuration, skills,
+plugins, and the release tree under normal agent/operator ownership. Do not point
+interactive or scheduled work at an Agora-owned workspace.
 
 Codex permission profiles do not compose with legacy `sandbox_mode` or
 `[sandbox_workspace_write]` configuration. Before cutover, migrate the agent's
@@ -164,7 +174,9 @@ npm run test:agent-runner:global-codex
 
 The validation resolves the launcher's exact native runtime and proves the final
 permission overlay can read ordinary host context while denying the encrypted
-credential and Codex transcript stores.
+credential, Codex transcript stores, another group's workspace, and creation or
+replacement of nested host instructions/configuration. It also proves an ordinary
+file remains writable inside the current group workspace.
 
 After provisioning an agent, run a read-only acceptance conversation through its
 real host profile. Expected values remain operator inputs so the reusable runner and

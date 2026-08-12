@@ -1,4 +1,4 @@
-export const runnerStateVersion = 2
+export const runnerStateVersion = 3
 export const handlerPlanVersion = 1
 export const maximumHandlerActions = 4
 export const maximumGroupPages = 100

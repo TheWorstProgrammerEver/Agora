@@ -86,16 +86,20 @@ const createRuntime = async (applicationKey, overrides = {}) => {
 
 const deterministicHandler = (calls, text) => async ({
   onBootstrapStarted,
+  onBootstrapStarting,
   onHeartbeat,
   onThreadReady,
   onTurnStarted,
+  onTurnStarting,
   threadId
 }) => {
   calls.count += 1
   if (!threadId) {
+    await onBootstrapStarting()
     await onBootstrapStarted(syntheticHandlerIdentity)
     await onThreadReady(randomUUID())
   }
+  await onTurnStarting()
   await onTurnStarted(syntheticHandlerIdentity)
   await onHeartbeat()
   return { messages: [{ text }], version: 1 }

@@ -6,10 +6,11 @@ import {
   readFile,
   rm,
   stat,
+  symlink,
   writeFile
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { RunnerCanceledError } from '../../../scripts/agent-runner/abort.mjs'
 import {
@@ -18,10 +19,15 @@ import {
   handlerPermissionConfig,
   runCodexHandler
 } from '../../../scripts/agent-runner/codex-handler.mjs'
+import {
+  groupWorkspacePath,
+  prepareGroupWorkspace
+} from '../../../scripts/agent-runner/group-workspace.mjs'
 import { isProcessExecuting, readProcessIdentity } from '../../../scripts/process-identity.mjs'
 
 const roots = []
 const threadId = randomUUID()
+const workspaceId = randomUUID()
 const context = {
   agentPrincipalId: randomUUID(),
   chunkId: 'a'.repeat(64),
@@ -47,7 +53,7 @@ const fixtureConfig = (root, executable) => ({
   publishableKey: 'example-public-key',
   stateDirectory: join(root, 'state'),
   threadBootstrapPromptPath: join(process.cwd(), 'ops/agent-runner/thread-bootstrap-prompt.md'),
-  workspace: process.cwd()
+  workspace: root
 })
 
 const createExecutable = async (source) => {
@@ -61,9 +67,11 @@ const createExecutable = async (source) => {
 
 const callbacks = (observed) => ({
   onBootstrapStarted: async (identity) => { observed.bootstrap = identity },
+  onBootstrapStarting: async () => undefined,
   onHeartbeat: async () => undefined,
   onThreadReady: async (value) => { observed.threadId = value },
-  onTurnStarted: async (identity) => { observed.turn = identity }
+  onTurnStarted: async (identity) => { observed.turn = identity },
+  onTurnStarting: async () => undefined
 })
 
 afterEach(async () => {
@@ -89,7 +97,8 @@ describe('Codex host inbox adapter', () => {
           credentialDirectoryPresent: Object.hasOwn(process.env, 'CREDENTIALS_DIRECTORY'),
           hostIntegrationPresent: process.env.AGORA_TEST_HOST_INTEGRATION === 'available',
           home: process.env.HOME,
-          prompt
+          prompt,
+          workspace: process.cwd()
         }))
       }
     `)
@@ -106,7 +115,8 @@ describe('Codex host inbox adapter', () => {
         contextAccess,
         outputPath,
         prompt: 'Generated prompt marker',
-        signal: new AbortController().signal
+        signal: new AbortController().signal,
+        workspaceId
       })).resolves.toEqual({ messages: [], version: 1 })
     } finally {
       if (priorIntegration === undefined) delete process.env.AGORA_TEST_HOST_INTEGRATION
@@ -123,7 +133,8 @@ describe('Codex host inbox adapter', () => {
       credentialDirectoryPresent: false,
       hostIntegrationPresent: true,
       home: root,
-      prompt: 'Generated prompt marker'
+      prompt: 'Generated prompt marker',
+      workspace: groupWorkspacePath(fixtureConfig(root, executable), context, workspaceId)
     })
     expect(observation.args.slice(0, 2)).toEqual(['exec', 'resume'])
     expect(observation.args.at(-2)).toBe(threadId)
@@ -150,7 +161,8 @@ describe('Codex host inbox adapter', () => {
       outputPath: join(root, 'existing-output.json'),
       prompt: 'Next turn',
       signal: new AbortController().signal,
-      threadId
+      threadId,
+      workspaceId
     })).resolves.toEqual({ messages: [], version: 1 })
     expect(observed.bootstrap).toBeUndefined()
     expect(observed.threadId).toBeUndefined()
@@ -170,7 +182,8 @@ describe('Codex host inbox adapter', () => {
       contextAccess,
       outputPath: join(root, 'missing-thread-output.json'),
       prompt: 'unused',
-      signal: new AbortController().signal
+      signal: new AbortController().signal,
+      workspaceId
     })).rejects.toMatchObject({ code: 'handler_failed' })
   })
 
@@ -187,7 +200,8 @@ describe('Codex host inbox adapter', () => {
       contextAccess,
       outputPath: join(root, 'legacy-output.json'),
       prompt: 'unused',
-      signal: new AbortController().signal
+      signal: new AbortController().signal,
+      workspaceId
     })).rejects.toMatchObject({ code: 'handler_failed' })
   })
 
@@ -217,7 +231,8 @@ describe('Codex host inbox adapter', () => {
       prompt: 'Cancellation fixture',
       signal: controller.signal,
       terminationOptions: { graceMs: 50, killWaitMs: 500 },
-      threadId
+      threadId,
+      workspaceId
     })
     await enteredPromise
     controller.abort()
@@ -257,7 +272,7 @@ describe('Codex host inbox adapter', () => {
     }
   })
 
-  it('denies transport credentials and Codex transcript stores to model tools', async () => {
+  it('denies absent and nested host instructions plus private runner state', async () => {
     const root = await mkdtemp(join(tmpdir(), 'agora-permissions-test-'))
     roots.push(root)
     const config = { ...fixtureConfig(root, process.execPath), workspace: root }
@@ -274,13 +289,56 @@ describe('Codex host inbox adapter', () => {
     ))
 
     expect(filesystem).toContain(`":root" = "read"`)
+    expect(filesystem).toContain(`${JSON.stringify(config.workspace)} = "read"`)
     expect(filesystem).toContain(`${JSON.stringify(config.credentialDirectory)} = "deny"`)
     expect(filesystem).toContain(`${JSON.stringify(config.stateDirectory)} = "deny"`)
     expect(filesystem).toContain(`${JSON.stringify(join(config.codexHome, 'sessions'))} = "deny"`)
     expect(filesystem).toContain(`${JSON.stringify(join(config.codexHome, 'config.toml'))} = "read"`)
+    expect(filesystem).toContain(`${JSON.stringify(join(config.workspace, 'AGENTS.override.md'))} = "deny"`)
     expect(values).toContain('permissions.agora-inbox.extends=":workspace"')
     expect(values).toContain(
       'permissions.agora-inbox.network.domains={ "*" = "allow", "127.0.0.1" = "allow", "localhost" = "allow" }'
     )
+  })
+
+  it('isolates each principal and group in a separate writable workspace', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agora-workspace-test-'))
+    roots.push(root)
+    const config = fixtureConfig(root, process.execPath)
+    const first = await prepareGroupWorkspace(config, context, workspaceId)
+    const otherPrincipal = { ...context, agentPrincipalId: randomUUID() }
+    const otherGroup = { ...context, groupId: randomUUID() }
+    const second = await prepareGroupWorkspace(config, otherPrincipal, randomUUID())
+    const third = await prepareGroupWorkspace(config, otherGroup, randomUUID())
+    const retiredWorkspaceId = randomUUID()
+    const retired = await prepareGroupWorkspace(config, context, retiredWorkspaceId)
+    const refreshed = await prepareGroupWorkspace(config, context, workspaceId)
+
+    expect(first.workspace).toBe(groupWorkspacePath(config, context, workspaceId))
+    expect(second.workspace).not.toBe(first.workspace)
+    expect(third.workspace).not.toBe(first.workspace)
+    expect(refreshed.protectedPaths).toEqual(expect.arrayContaining([
+      dirname(dirname(second.workspace)),
+      dirname(third.workspace),
+      retired.workspace
+    ]))
+    expect(refreshed.protectedPaths).not.toContain(first.workspace)
+  })
+
+  it('rejects a redirected group-workspace root before creating descendants', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agora-workspace-redirect-test-'))
+    roots.push(root)
+    const outside = await mkdtemp(join(tmpdir(), 'agora-workspace-outside-test-'))
+    roots.push(outside)
+    await symlink(outside, join(root, '.agora-inbox'))
+
+    await expect(prepareGroupWorkspace(
+      fixtureConfig(root, process.execPath),
+      context,
+      workspaceId
+    )).rejects.toMatchObject({ code: 'handler_failed' })
+    await expect(stat(join(outside, context.agentPrincipalId))).rejects.toMatchObject({
+      code: 'ENOENT'
+    })
   })
 })

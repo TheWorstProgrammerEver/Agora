@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, rmdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { runCodexHandler } from '../../scripts/agent-runner/codex-handler.mjs'
+import { groupWorkspacePath } from '../../scripts/agent-runner/group-workspace.mjs'
 
 const required = (name) => {
   const value = process.env[name]?.trim()
@@ -27,6 +28,21 @@ const root = await mkdtemp(join(tmpdir(), 'agora-host-identity-'))
 const credentialDirectory = join(root, 'credentials')
 const outputPath = join(root, 'output.json')
 let threadId
+const workspaceId = randomUUID()
+const agentPrincipalId = randomUUID()
+const groupId = randomUUID()
+const config = {
+  agentHome,
+  codexBin,
+  codexHome: join(agentHome, '.codex'),
+  credentialDirectory,
+  handlerOutputSchemaPath: join(process.cwd(), 'ops/agent-runner/handler-output.schema.json'),
+  handlerTimeoutMs: 10 * 60_000,
+  leaseDurationMs: 60_000,
+  stateDirectory: root,
+  threadBootstrapPromptPath: join(process.cwd(), 'ops/agent-runner/thread-bootstrap-prompt.md'),
+  workspace: agentHome
+}
 
 try {
   await mkdir(credentialDirectory, { mode: 0o700 })
@@ -36,26 +52,12 @@ try {
     { mode: 0o400 }
   )
   const result = await runCodexHandler({
-    config: {
-      agentHome,
-      codexBin,
-      codexHome: join(agentHome, '.codex'),
-      credentialDirectory,
-      handlerOutputSchemaPath: join(process.cwd(), 'ops/agent-runner/handler-output.schema.json'),
-      handlerTimeoutMs: 10 * 60_000,
-      leaseDurationMs: 60_000,
-      stateDirectory: root,
-      threadBootstrapPromptPath: join(
-        process.cwd(),
-        'ops/agent-runner/thread-bootstrap-prompt.md'
-      ),
-      workspace: agentHome
-    },
+    config,
     context: {
-      agentPrincipalId: randomUUID(),
+      agentPrincipalId,
       chunkId: 'd'.repeat(64),
       cursor: '0',
-      groupId: randomUUID(),
+      groupId,
       messages: [],
       through: '1'
     },
@@ -64,9 +66,11 @@ try {
       url: 'http://127.0.0.1:9/context'
     },
     onBootstrapStarted: async () => undefined,
+    onBootstrapStarting: async () => undefined,
     onHeartbeat: async () => undefined,
     onThreadReady: async (value) => { threadId = value },
     onTurnStarted: async () => undefined,
+    onTurnStarting: async () => undefined,
     outputPath,
     prompt: `# Trusted host identity acceptance validation
 
@@ -81,7 +85,8 @@ of work in the home directory, (2) the identifier of the merged resilient
 agent-message-runner issue named in the durable Agora note, and (3) the exact current
 title of ${issueIdentifier}. Do not include paths, credentials, commentary, or other
 fields.`,
-    signal: new AbortController().signal
+    signal: new AbortController().signal,
+    workspaceId
   })
   const expected = `${hostFile} | ${durableMarker} | ${issueTitle}`
   if (!threadId || result.messages.length !== 1 || result.messages[0].text !== expected) {
@@ -89,6 +94,11 @@ fields.`,
   }
 } finally {
   await rm(root, { force: true, recursive: true })
+  const workspace = groupWorkspacePath(config, { agentPrincipalId, groupId }, workspaceId)
+  await rm(workspace, { force: true, recursive: true })
+  await rmdir(join(agentHome, '.agora-inbox', agentPrincipalId, groupId)).catch(() => undefined)
+  await rmdir(join(agentHome, '.agora-inbox', agentPrincipalId)).catch(() => undefined)
+  await rmdir(join(agentHome, '.agora-inbox')).catch(() => undefined)
 }
 
 process.stdout.write('Host identity, durable context, and authenticated Linear validation passed.\n')

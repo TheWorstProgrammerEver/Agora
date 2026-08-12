@@ -51,13 +51,40 @@ describe('durable runner store', () => {
       version: 1
     }), { mode: 0o600 })
 
-    await expect(store.read()).resolves.toEqual({
+    const migrated = await store.read()
+    expect(migrated).toMatchObject({
+      groups: { [groupId]: { cursor: '3', observedHighWatermark: '5' } },
+      principalId,
+      version: 3
+    })
+    expect(migrated.groups[groupId].workspaceId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+    )
+  })
+
+  it('does not resume a pre-isolation version-two thread in the host root', async () => {
+    const store = await createStore()
+    const principalId = randomUUID()
+    const groupId = randomUUID()
+    await writeFile(store.statePath, JSON.stringify({
       groups: {
-        [groupId]: { cursor: '3', observedHighWatermark: '5' }
+        [groupId]: {
+          cursor: '3',
+          observedHighWatermark: '5',
+          threadId: randomUUID()
+        }
       },
       principalId,
       version: 2
+    }), { mode: 0o600 })
+
+    const migrated = await store.read()
+    expect(migrated.groups[groupId]).toMatchObject({
+      cursor: '3',
+      observedHighWatermark: '5'
     })
+    expect(migrated.groups[groupId].threadId).toBeUndefined()
+    expect(migrated.groups[groupId].workspaceId).toBeDefined()
   })
 
   it('binds a private durable plan to its digest and removes it after commit', async () => {

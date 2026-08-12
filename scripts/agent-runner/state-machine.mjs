@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { handlerPlanVersion } from './constants.mjs'
 import {
   boundedChunkEnd,
@@ -44,7 +44,8 @@ export const reconcileGroups = (state, { groups, principalId }) => {
     if (!existing) {
       state.groups[group.id] = {
         cursor: serverReadThrough,
-        observedHighWatermark: group.highWatermarkSequence
+        observedHighWatermark: group.highWatermarkSequence,
+        workspaceId: randomUUID()
       }
       continue
     }
@@ -146,7 +147,6 @@ export const markLeaseHandling = (
   groupId,
   chunkId,
   ownerRunId,
-  child,
   expiresAt
 ) => {
   const lease = requireOwnedLease(state, groupId, chunkId, ownerRunId)
@@ -155,7 +155,6 @@ export const markLeaseHandling = (
     throw new Error('Agora runner lease phase is invalid.')
   }
 
-  lease.child = child
   lease.expiresAt = expiresAt
   lease.phase = 'handling'
 }
@@ -165,7 +164,6 @@ export const markLeaseBootstrapping = (
   groupId,
   chunkId,
   ownerRunId,
-  child,
   expiresAt
 ) => {
   const lease = requireOwnedLease(state, groupId, chunkId, ownerRunId)
@@ -174,9 +172,29 @@ export const markLeaseBootstrapping = (
     throw new Error('Agora runner lease phase is invalid.')
   }
 
-  lease.child = child
   lease.expiresAt = expiresAt
   lease.phase = 'bootstrapping'
+}
+
+export const attachLeaseChild = (
+  state,
+  groupId,
+  chunkId,
+  ownerRunId,
+  phase,
+  child,
+  expiresAt
+) => {
+  const lease = requireOwnedLease(state, groupId, chunkId, ownerRunId)
+
+  if (!['bootstrapping', 'handling'].includes(phase)
+    || lease.phase !== phase
+    || lease.child !== undefined) {
+    throw new Error('Agora runner lease phase is invalid.')
+  }
+
+  lease.child = child
+  lease.expiresAt = expiresAt
 }
 
 export const bindGroupThread = (state, groupId, chunkId, ownerRunId, threadId) => {
@@ -279,7 +297,7 @@ export const recoverLease = (state, groupId, {
     return lease
   }
 
-  if (lease.phase === 'handling') {
+  if (lease.phase === 'bootstrapping' || lease.phase === 'handling') {
     lease.failureCode = 'turn_indeterminate'
     group.lastFailureCode = 'turn_indeterminate'
     lease.phase = 'failed'

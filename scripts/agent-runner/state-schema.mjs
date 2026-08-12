@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import {
   agentKeySearchPattern,
   handlerFailureCodes,
@@ -121,11 +122,12 @@ const isGroupState = (value) => {
   if (!isObject(value)
     || !hasExactKeys(
       value,
-      ['cursor', 'observedHighWatermark'],
+      ['cursor', 'observedHighWatermark', 'workspaceId'],
       ['lastFailureCode', 'lastHandledThrough', 'lease', 'threadId']
     )
     || !isSequence(value.cursor)
     || !isSequence(value.observedHighWatermark)
+    || !isUuid(value.workspaceId)
     || compareSequences(value.cursor, value.observedHighWatermark) > 0
     || (value.lastHandledThrough !== undefined && (
       !isSequence(value.lastHandledThrough)
@@ -158,8 +160,20 @@ export const createEmptyRunnerState = () => ({
 })
 
 export const migrateRunnerState = (value) => {
-  if (isObject(value) && value.version === 1) {
-    return { ...value, version: runnerStateVersion }
+  if (isObject(value) && [1, 2].includes(value.version) && isObject(value.groups)) {
+    return {
+      ...value,
+      groups: Object.fromEntries(Object.entries(value.groups).map(([groupId, group]) => [
+        groupId,
+        isObject(group)
+          ? Object.fromEntries([
+              ...Object.entries(group).filter(([key]) => key !== 'threadId'),
+              ['workspaceId', randomUUID()]
+            ])
+          : group
+      ])),
+      version: runnerStateVersion
+    }
   }
 
   return value

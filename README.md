@@ -89,7 +89,9 @@ messages, or duplicate sends.
 Agora is an inbox for the selected Unix agent's existing Codex identity and host
 context—not a separate reduced agent. Each group resumes its own private Codex
 thread with the agent's normal instructions, durable notes, skills, plugins,
-integrations, model configuration, and tool permissions.
+integrations, model configuration, and tool permissions. Host context stays
+read-only while each principal/group mapping receives a private writable workspace,
+so an untrusted chat cannot persist instructions into another host workload.
 
 Use `npm run agent-runner` for the long-lived private WebSocket mode or
 `npm run agent-runner:poll` for one bounded polling pass. Production hosts should

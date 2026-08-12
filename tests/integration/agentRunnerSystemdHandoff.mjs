@@ -272,7 +272,7 @@ TimeoutStopSec=5s
     cliPath,
     'status'
   ], { output: 'buffer' })).toString('utf8'))
-  if (status.version !== 2
+  if (status.version !== 3
     || status.groups.length !== 0
     || status.principal !== null
     || status.lastActivity?.code !== 'realtime_connected') {
