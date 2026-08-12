@@ -4,6 +4,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   rm,
   stat,
   symlink,
@@ -134,7 +135,11 @@ describe('Codex host inbox adapter', () => {
       hostIntegrationPresent: true,
       home: root,
       prompt: 'Generated prompt marker',
-      workspace: groupWorkspacePath(fixtureConfig(root, executable), context, workspaceId)
+      workspace: await realpath(groupWorkspacePath(
+        fixtureConfig(root, executable),
+        context,
+        workspaceId
+      ))
     })
     expect(observation.args.slice(0, 2)).toEqual(['exec', 'resume'])
     expect(observation.args.at(-2)).toBe(threadId)
