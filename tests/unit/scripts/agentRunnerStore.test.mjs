@@ -39,6 +39,27 @@ describe('durable runner store', () => {
     expect((await readFile(store.statePath, 'utf8'))).not.toContain('.agora-write-')
   })
 
+  it('migrates version-one state without changing cursors or leases', async () => {
+    const store = await createStore()
+    const principalId = randomUUID()
+    const groupId = randomUUID()
+    await writeFile(store.statePath, JSON.stringify({
+      groups: {
+        [groupId]: { cursor: '3', observedHighWatermark: '5' }
+      },
+      principalId,
+      version: 1
+    }), { mode: 0o600 })
+
+    await expect(store.read()).resolves.toEqual({
+      groups: {
+        [groupId]: { cursor: '3', observedHighWatermark: '5' }
+      },
+      principalId,
+      version: 2
+    })
+  })
+
   it('binds a private durable plan to its digest and removes it after commit', async () => {
     const store = await createStore()
     const lease = {

@@ -55,10 +55,12 @@ const createRuntime = async (applicationKey, overrides = {}) => {
   const root = await mkdtemp(join(tmpdir(), 'agora-runner-security-'))
   const credentialDirectory = join(root, 'credentials')
   const handlerWorkspace = join(root, 'handler-workspace')
+  const codexHome = join(root, 'codex-home')
   const stateDirectory = join(root, 'state')
   runtimeRoots.push(root)
   await mkdir(credentialDirectory, { mode: 0o700 })
   await mkdir(handlerWorkspace, { mode: 0o700 })
+  await mkdir(codexHome, { mode: 0o700 })
   await writeFile(join(credentialDirectory, 'agora-agent-key'), applicationKey, {
     mode: 0o400
   })
@@ -73,16 +75,28 @@ const createRuntime = async (applicationKey, overrides = {}) => {
     AGORA_RUNNER_SUPABASE_PUBLISHABLE_KEY: localSupabasePublicConfig.publishableKey,
     AGORA_RUNNER_SUPABASE_URL: localSupabasePublicConfig.url,
     AGORA_RUNNER_WORKSPACE: handlerWorkspace,
+    CODEX_HOME: codexHome,
     CREDENTIALS_DIRECTORY: credentialDirectory,
+    HOME: root,
     ...overrides
   })
 
   return { config, root }
 }
 
-const deterministicHandler = (calls, text) => async ({ onHeartbeat, onStarted }) => {
+const deterministicHandler = (calls, text) => async ({
+  onBootstrapStarted,
+  onHeartbeat,
+  onThreadReady,
+  onTurnStarted,
+  threadId
+}) => {
   calls.count += 1
-  await onStarted(syntheticHandlerIdentity)
+  if (!threadId) {
+    await onBootstrapStarted(syntheticHandlerIdentity)
+    await onThreadReady(randomUUID())
+  }
+  await onTurnStarted(syntheticHandlerIdentity)
   await onHeartbeat()
   return { messages: [{ text }], version: 1 }
 }
@@ -216,7 +230,7 @@ describe('agent runner against local Supabase', () => {
       execFileSync(codexRuntime.executable, [
         'sandbox',
         ...handlerPermissionConfig(runtime.config).flatMap((value) => ['-c', value]),
-        '--permission-profile', 'agora-handler',
+        '--permission-profile', 'agora-inbox',
         '--cd', process.cwd(),
         '--',
         '/bin/sh', '-c', 'test ! -r "$1" && test -r "$2"',

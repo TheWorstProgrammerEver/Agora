@@ -3,7 +3,6 @@ import { readFile } from 'node:fs/promises'
 export const buildHandlerPrompt = async ({
   apiCli,
   context,
-  profile,
   promptPath
 }) => {
   const instructions = await readFile(promptPath, 'utf8')
@@ -13,7 +12,6 @@ export const buildHandlerPrompt = async ({
     chunkId: context.chunkId,
     cursor: context.cursor,
     groupId: context.groupId,
-    handlerProfile: profile,
     messages: context.messages,
     sequenceRange: {
       fromExclusive: context.cursor,

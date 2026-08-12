@@ -2,7 +2,6 @@ import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
 import { validateHandlerPlan } from '../../../scripts/agent-runner/api-validation.mjs'
 import { loadRunnerConfig } from '../../../scripts/agent-runner/config.mjs'
-import { selectHandlerProfile } from '../../../scripts/agent-runner/handler-profile.mjs'
 import { validateAvailability } from '../../../scripts/agent-runner/realtime-transport.mjs'
 import { isIsoTimestamp } from '../../../scripts/agent-runner/value-validation.mjs'
 
@@ -12,6 +11,8 @@ const validEnvironment = (overrides = {}) => ({
   AGORA_RUNNER_SUPABASE_PUBLISHABLE_KEY: 'public-project-key',
   AGORA_RUNNER_SUPABASE_URL: 'https://example.supabase.co',
   AGORA_RUNNER_WORKSPACE: '/srv/agora',
+  CODEX_HOME: '/home/example/.codex',
+  HOME: '/home/example',
   CREDENTIALS_DIRECTORY: '/run/credentials/agora-agent-runner@test.service',
   ...overrides
 })
@@ -21,8 +22,10 @@ describe('agent runner deployment contract', () => {
     const config = loadRunnerConfig(validEnvironment())
 
     expect(config.apiUrl).toBe('https://example.supabase.co/functions/v1/agora')
+    expect(config.agentHome).toBe('/home/example')
     expect(config.supabaseUrl).toBe('https://example.supabase.co')
     expect(config.stateDirectory).toBe('/var/lib/agora-agent-runner-test')
+    expect(config.codexHome).toBe('/home/example/.codex')
     expect(() => loadRunnerConfig(validEnvironment({
       AGORA_RUNNER_API_URL: 'https://agent:secret@example.supabase.co/functions/v1/agora'
     }))).toThrow('AGORA_RUNNER_API_URL is invalid')
@@ -39,19 +42,12 @@ describe('agent runner deployment contract', () => {
     }))).toThrow('workspace is required')
   })
 
-  it('chooses bounded model and reasoning profiles from message context', () => {
+  it('inherits model and reasoning configuration from the host profile', () => {
     const config = loadRunnerConfig(validEnvironment())
 
-    expect(selectHandlerProfile([{ text: 'Please acknowledge this.' }], config)).toEqual({
-      model: 'gpt-5.6-luna',
-      reasoningEffort: 'low'
-    })
-    expect(selectHandlerProfile([{
-      text: 'Review the production authorization architecture and migration plan.'
-    }], config)).toEqual({
-      model: 'gpt-5.6-sol',
-      reasoningEffort: 'xhigh'
-    })
+    expect(config).not.toHaveProperty('standardModel')
+    expect(config).not.toHaveProperty('complexModel')
+    expect(config.codexHome).toBe('/home/example/.codex')
   })
 
   it('accepts only the exact private Realtime availability payload', () => {
@@ -84,9 +80,10 @@ describe('agent runner deployment contract', () => {
       'LoadCredentialEncrypted=agora-agent-key:/etc/credstore.encrypted/agora-agent-key.cred'
     )
     expect(unit).toContain('Environment=AGORA_RUNNER_STATE_DIRECTORY=/var/lib/agora-agent-runner-%i')
-    expect(unit).toContain('Environment=AGORA_RUNNER_WORKSPACE=/run/agora-agent-runner-handler-%i')
-    expect(unit).toContain('Environment=CODEX_HOME=/var/lib/agora-agent-runner-%i/codex')
-    expect(unit).toContain('WorkingDirectory=/run/agora-agent-runner-handler-%i')
+    expect(unit).toContain('Environment=AGORA_RUNNER_WORKSPACE=/home/%i')
+    expect(unit).toContain('Environment=CODEX_HOME=/home/%i/.codex')
+    expect(unit).toContain('Environment=HOME=/home/%i')
+    expect(unit).toContain('WorkingDirectory=/home/%i')
     expect(unit).toContain('RuntimeDirectory=agora-agent-runner-handler-%i')
     expect(unit).toContain('ExecStart=/usr/local/bin/agora-agent-runner run')
     expect(unit).toContain('Restart=always')

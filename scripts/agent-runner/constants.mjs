@@ -1,4 +1,4 @@
-export const runnerStateVersion = 1
+export const runnerStateVersion = 2
 export const handlerPlanVersion = 1
 export const maximumHandlerActions = 4
 export const maximumGroupPages = 100
@@ -16,5 +16,6 @@ export const handlerFailureCodes = new Set([
   'handler_failed',
   'handler_output_invalid',
   'handler_timeout',
-  'range_unavailable'
+  'range_unavailable',
+  'turn_indeterminate'
 ])

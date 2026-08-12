@@ -13,12 +13,14 @@ const repository = resolve(repositorySource ?? '')
 const uid = Number(uidSource)
 const gid = Number(gidSource)
 const nodePath = resolve(nodeSource ?? '')
+const agentHome = repository.match(/^\/home\/[^/]+/)?.[0]
 
 if (!Number.isSafeInteger(uid)
   || uid < 1
   || !Number.isSafeInteger(gid)
   || gid < 1
   || !repository.startsWith('/home/')
+  || !agentHome
   || !nodePath.startsWith('/')) {
   throw new Error('The live systemd runner handoff arguments are invalid.')
 }
@@ -35,8 +37,7 @@ const dropInDirectory = join('/run/systemd/system', `${unitName}.d`)
 const dropInPath = join(dropInDirectory, 'live-validation.conf')
 const environmentPath = join(testRoot, 'runner.env')
 const stateDirectory = `/var/lib/agora-agent-runner-${instanceName}`
-const handlerWorkspace = `/run/agora-agent-runner-handler-${instanceName}`
-const codexHome = join(stateDirectory, 'codex')
+const codexHome = join(agentHome, '.codex')
 const cliPath = join(repository, 'scripts/agent-runner/cli.mjs')
 const productionUnitPath = join(repository, 'ops/systemd/agora-agent-runner@.service')
 const credentialProbePath = join(repository, 'tests/fixtures/agentRunnerCredentialProbe.mjs')
@@ -89,11 +90,11 @@ const assertProductionNamespace = async () => {
     ['NoNewPrivileges', 'yes'],
     ['PrivateDevices', 'yes'],
     ['PrivateTmp', 'yes'],
-    ['ProtectHome', 'read-only'],
+    ['ProtectHome', 'no'],
     ['ProtectSystem', 'strict'],
     ['RuntimeDirectory', `agora-agent-runner-handler-${instanceName}`],
     ['StateDirectory', `agora-agent-runner-${instanceName}`],
-    ['WorkingDirectory', handlerWorkspace]
+    ['WorkingDirectory', agentHome]
   ])
   for (const [property, value] of expected) {
     if (await show(property) !== value) {
@@ -106,7 +107,8 @@ const assertProductionNamespace = async () => {
   const environment = await show('Environment')
   if (!environment.includes(`CODEX_HOME=${codexHome}`)
     || !environment.includes(`AGORA_RUNNER_STATE_DIRECTORY=${stateDirectory}`)
-    || !environment.includes(`AGORA_RUNNER_WORKSPACE=${handlerWorkspace}`)) {
+    || !environment.includes(`AGORA_RUNNER_WORKSPACE=${agentHome}`)
+    || !environment.includes(`HOME=${agentHome}`)) {
     throw new Error('The live systemd runner did not resolve its production-managed paths.')
   }
 }
@@ -207,6 +209,10 @@ User=${uid}
 Group=${gid}
 EnvironmentFile=
 EnvironmentFile=${environmentPath}
+Environment=HOME=${agentHome}
+Environment=CODEX_HOME=${codexHome}
+Environment=AGORA_RUNNER_WORKSPACE=${agentHome}
+WorkingDirectory=${agentHome}
 LoadCredentialEncrypted=
 LoadCredentialEncrypted=agora-agent-key:${credentialPath}
 ExecStart=
@@ -266,7 +272,7 @@ TimeoutStopSec=5s
     cliPath,
     'status'
   ], { output: 'buffer' })).toString('utf8'))
-  if (status.version !== 1
+  if (status.version !== 2
     || status.groups.length !== 0
     || status.principal !== null
     || status.lastActivity?.code !== 'realtime_connected') {
@@ -294,6 +300,5 @@ TimeoutStopSec=5s
   await systemctl('reset-failed', unitName).catch(() => undefined)
   await closeServer().catch(() => undefined)
   await rm(stateDirectory, { force: true, recursive: true })
-  await rm(handlerWorkspace, { force: true, recursive: true })
   await rm(testRoot, { force: true, recursive: true })
 }

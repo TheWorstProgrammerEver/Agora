@@ -13,7 +13,14 @@ import {
   isUuid
 } from './value-validation.mjs'
 
-const leasePhases = new Set(['failed', 'handling', 'leased', 'planned', 'retryable'])
+const leasePhases = new Set([
+  'bootstrapping',
+  'failed',
+  'handling',
+  'leased',
+  'planned',
+  'retryable'
+])
 const digestPattern = /^sha256:[0-9a-f]{64}$/
 const chunkIdPattern = /^[0-9a-f]{64}$/
 
@@ -99,7 +106,7 @@ const isLease = (value, group) => {
       && value.child === undefined
   }
 
-  if (value.phase === 'handling') {
+  if (value.phase === 'bootstrapping' || value.phase === 'handling') {
     return value.failureCode === undefined && value.retryAt === undefined
       && value.plan === undefined
   }
@@ -115,7 +122,7 @@ const isGroupState = (value) => {
     || !hasExactKeys(
       value,
       ['cursor', 'observedHighWatermark'],
-      ['lastFailureCode', 'lastHandledThrough', 'lease']
+      ['lastFailureCode', 'lastHandledThrough', 'lease', 'threadId']
     )
     || !isSequence(value.cursor)
     || !isSequence(value.observedHighWatermark)
@@ -124,6 +131,7 @@ const isGroupState = (value) => {
       !isSequence(value.lastHandledThrough)
       || compareSequences(value.lastHandledThrough, value.cursor) > 0
     ))
+    || (value.threadId !== undefined && !isUuid(value.threadId))
     || (value.lastFailureCode !== undefined && (
       typeof value.lastFailureCode !== 'string'
       || !handlerFailureCodes.has(value.lastFailureCode)
@@ -148,6 +156,14 @@ export const createEmptyRunnerState = () => ({
   principalId: null,
   version: runnerStateVersion
 })
+
+export const migrateRunnerState = (value) => {
+  if (isObject(value) && value.version === 1) {
+    return { ...value, version: runnerStateVersion }
+  }
+
+  return value
+}
 
 export const validateRunnerState = (value) => {
   if (!isObject(value)

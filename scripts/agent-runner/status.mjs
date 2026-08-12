@@ -14,7 +14,8 @@ export const runnerStatus = (state) => ({
           through: group.lease.through
         }
       : null,
-    observedHighWatermark: group.observedHighWatermark
+    observedHighWatermark: group.observedHighWatermark,
+    threadBound: group.threadId !== undefined
   })),
   lastActivity: state.lastActivity ?? null,
   principal: state.principalId ? opaqueLabel(state.principalId) : null,

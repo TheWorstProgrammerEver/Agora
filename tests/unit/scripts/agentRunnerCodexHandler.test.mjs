@@ -4,17 +4,16 @@ import {
   mkdir,
   mkdtemp,
   readFile,
-  realpath,
   rm,
   stat,
-  symlink,
   writeFile
 } from 'node:fs/promises'
-import { arch, tmpdir, platform } from 'node:os'
-import { join, sep } from 'node:path'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { RunnerCanceledError } from '../../../scripts/agent-runner/abort.mjs'
 import {
+  buildBootstrapArgs,
   buildCodexArgs,
   handlerPermissionConfig,
   runCodexHandler
@@ -22,6 +21,7 @@ import {
 import { isProcessExecuting, readProcessIdentity } from '../../../scripts/process-identity.mjs'
 
 const roots = []
+const threadId = randomUUID()
 const context = {
   agentPrincipalId: randomUUID(),
   chunkId: 'a'.repeat(64),
@@ -30,30 +30,23 @@ const context = {
   messages: [],
   through: '1'
 }
-const profile = { model: 'gpt-5.6-luna', reasoningEffort: 'medium' }
 const contextAccess = {
   capability: 'c'.repeat(43),
   url: 'http://127.0.0.1:43210/context'
 }
-const packageTargets = {
-  darwin: {
-    arm64: ['codex-darwin-arm64', 'aarch64-apple-darwin'],
-    x64: ['codex-darwin-x64', 'x86_64-apple-darwin']
-  },
-  linux: {
-    arm64: ['codex-linux-arm64', 'aarch64-unknown-linux-musl'],
-    x64: ['codex-linux-x64', 'x86_64-unknown-linux-musl']
-  }
-}
 
 const fixtureConfig = (root, executable) => ({
+  agentHome: root,
   apiUrl: 'https://example.supabase.co/functions/v1/agora',
   codexBin: executable,
-  credentialDirectory: root,
+  codexHome: join(root, '.codex'),
+  credentialDirectory: join(root, 'credentials'),
   handlerOutputSchemaPath: join(process.cwd(), 'ops/agent-runner/handler-output.schema.json'),
   handlerTimeoutMs: 2000,
   leaseDurationMs: 1000,
   publishableKey: 'example-public-key',
+  stateDirectory: join(root, 'state'),
+  threadBootstrapPromptPath: join(process.cwd(), 'ops/agent-runner/thread-bootstrap-prompt.md'),
   workspace: process.cwd()
 })
 
@@ -66,109 +59,139 @@ const createExecutable = async (source) => {
   return { executable, root }
 }
 
-const createGlobalCodexLayout = async () => {
-  const root = await mkdtemp(join(tmpdir(), 'agora-global-codex-test-'))
-  roots.push(root)
-  const [platformPackage, targetTriple] = packageTargets[platform()][arch()]
-  const moduleRoot = join(root, 'lib/node_modules/@openai')
-  const packageRoot = join(moduleRoot, 'codex')
-  const platformRoot = join(moduleRoot, platformPackage)
-  const launcher = join(packageRoot, 'bin/codex.js')
-  const runtimeDirectory = join(platformRoot, 'vendor', targetTriple, 'bin')
-  const runtime = join(runtimeDirectory, 'codex')
-  const publicDirectory = join(root, 'bin')
-  const publicLauncher = join(publicDirectory, 'codex')
-  await Promise.all([
-    mkdir(join(packageRoot, 'bin'), { recursive: true }),
-    mkdir(runtimeDirectory, { recursive: true }),
-    mkdir(publicDirectory, { recursive: true })
-  ])
-  await Promise.all([
-    writeFile(launcher, '#!/usr/bin/env node\n', { mode: 0o700 }),
-    writeFile(join(packageRoot, 'package.json'), JSON.stringify({
-      bin: { codex: 'bin/codex.js' },
-      name: '@openai/codex',
-      version: '0.147.0'
-    })),
-    writeFile(join(platformRoot, 'package.json'), JSON.stringify({
-      cpu: [arch()],
-      name: '@openai/codex',
-      os: [platform()],
-      version: `0.147.0-${platform()}-${arch()}`
-    })),
-    writeFile(runtime, '#!/bin/sh\nexit 0\n', { mode: 0o700 })
-  ])
-  await Promise.all([
-    chmod(launcher, 0o700),
-    chmod(runtime, 0o700),
-    symlink('../lib/node_modules/@openai/codex/bin/codex.js', publicLauncher)
-  ])
-  const [resolvedPackageRoot, resolvedPlatformRoot, resolvedRuntimeDirectory] = await Promise.all([
-    realpath(packageRoot),
-    realpath(platformRoot),
-    realpath(runtimeDirectory)
-  ])
-  return {
-    packageRoot: resolvedPackageRoot,
-    platformRoot: resolvedPlatformRoot,
-    publicLauncher,
-    runtimeDirectory: resolvedRuntimeDirectory
-  }
-}
+const callbacks = (observed) => ({
+  onBootstrapStarted: async (identity) => { observed.bootstrap = identity },
+  onHeartbeat: async () => undefined,
+  onThreadReady: async (value) => { observed.threadId = value },
+  onTurnStarted: async (identity) => { observed.turn = identity }
+})
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true })))
 })
 
-describe('Codex chunk handler adapter', () => {
-  it('uses the exact structured-output stdin contract and observes EOF', async () => {
+describe('Codex host inbox adapter', () => {
+  it('creates one durable thread before resuming it with the untrusted turn', async () => {
     const { executable, root } = await createExecutable(`
       import { writeFile } from 'node:fs/promises'
       const args = process.argv.slice(2)
-      const output = args[args.indexOf('--output-last-message') + 1]
       let prompt = ''
       for await (const chunk of process.stdin) prompt += chunk
-      await writeFile(output, JSON.stringify({ messages: [], version: 1 }))
-      await writeFile(output + '.observation', JSON.stringify({
-        args,
-        contextCapabilityPresent: typeof process.env.AGORA_RUNNER_CONTEXT_CAPABILITY === 'string',
-        contextUrlPresent: typeof process.env.AGORA_RUNNER_CONTEXT_URL === 'string',
-        credentialDirectoryPresent: Object.hasOwn(process.env, 'CREDENTIALS_DIRECTORY'),
-        legacyApiUrlPresent: Object.hasOwn(process.env, 'AGORA_RUNNER_API_URL'),
-        prompt
-      }))
+      if (args[1] !== 'resume') {
+        process.stdout.write(JSON.stringify({ type: 'thread.started', thread_id: ${JSON.stringify(threadId)} }) + '\\n')
+      } else {
+        const output = args[args.indexOf('--output-last-message') + 1]
+        await writeFile(output, JSON.stringify({ messages: [], version: 1 }))
+        await writeFile(output + '.observation', JSON.stringify({
+          args,
+          codexHome: process.env.CODEX_HOME,
+          contextCapabilityPresent: typeof process.env.AGORA_RUNNER_CONTEXT_CAPABILITY === 'string',
+          credentialDirectoryPresent: Object.hasOwn(process.env, 'CREDENTIALS_DIRECTORY'),
+          hostIntegrationPresent: process.env.AGORA_TEST_HOST_INTEGRATION === 'available',
+          home: process.env.HOME,
+          prompt
+        }))
+      }
     `)
     const outputPath = join(root, 'handler-output.json')
-    let started
+    const observed = {}
+    const priorIntegration = process.env.AGORA_TEST_HOST_INTEGRATION
+    process.env.AGORA_TEST_HOST_INTEGRATION = 'available'
 
-    await expect(runCodexHandler({
-      config: fixtureConfig(root, executable),
-      context,
-      contextAccess,
-      onHeartbeat: async () => undefined,
-      onStarted: async (identity) => { started = identity },
-      outputPath,
-      profile,
-      prompt: 'Generated prompt marker',
-      signal: new AbortController().signal
-    })).resolves.toEqual({ messages: [], version: 1 })
+    try {
+      await expect(runCodexHandler({
+        ...callbacks(observed),
+        config: fixtureConfig(root, executable),
+        context,
+        contextAccess,
+        outputPath,
+        prompt: 'Generated prompt marker',
+        signal: new AbortController().signal
+      })).resolves.toEqual({ messages: [], version: 1 })
+    } finally {
+      if (priorIntegration === undefined) delete process.env.AGORA_TEST_HOST_INTEGRATION
+      else process.env.AGORA_TEST_HOST_INTEGRATION = priorIntegration
+    }
 
     const observation = JSON.parse(await readFile(`${outputPath}.observation`, 'utf8'))
-    expect(observation.prompt).toBe('Generated prompt marker')
+    expect(observed.threadId).toBe(threadId)
+    expect(observed.bootstrap.processGroupId).toBe(observed.bootstrap.pid)
+    expect(observed.turn.processGroupId).toBe(observed.turn.pid)
     expect(observation).toMatchObject({
       contextCapabilityPresent: true,
-      contextUrlPresent: true,
+      codexHome: join(root, '.codex'),
       credentialDirectoryPresent: false,
-      legacyApiUrlPresent: false
+      hostIntegrationPresent: true,
+      home: root,
+      prompt: 'Generated prompt marker'
     })
+    expect(observation.args.slice(0, 2)).toEqual(['exec', 'resume'])
+    expect(observation.args.at(-2)).toBe(threadId)
     expect(observation.args.at(-1)).toBe('-')
-    expect(observation.args).toContain('--output-schema')
-    expect(observation.args).toContain('--output-last-message')
-    expect(started.processGroupId).toBe(started.pid)
     expect((await stat(outputPath)).mode & 0o777).toBe(0o600)
   })
 
-  it('settles cancellation and escalates a resistant handler group', async () => {
+  it('resumes an existing group thread without creating another thread', async () => {
+    const { executable, root } = await createExecutable(`
+      import { writeFile } from 'node:fs/promises'
+      const args = process.argv.slice(2)
+      if (args[1] !== 'resume') process.exit(91)
+      for await (const chunk of process.stdin) void chunk
+      const output = args[args.indexOf('--output-last-message') + 1]
+      await writeFile(output, JSON.stringify({ messages: [], version: 1 }))
+    `)
+    const observed = {}
+
+    await expect(runCodexHandler({
+      ...callbacks(observed),
+      config: fixtureConfig(root, executable),
+      context,
+      contextAccess,
+      outputPath: join(root, 'existing-output.json'),
+      prompt: 'Next turn',
+      signal: new AbortController().signal,
+      threadId
+    })).resolves.toEqual({ messages: [], version: 1 })
+    expect(observed.bootstrap).toBeUndefined()
+    expect(observed.threadId).toBeUndefined()
+    expect(observed.turn).toBeDefined()
+  })
+
+  it('fails closed when bootstrap output does not identify one thread', async () => {
+    const { executable, root } = await createExecutable(`
+      for await (const chunk of process.stdin) void chunk
+      process.stdout.write(JSON.stringify({ type: 'turn.completed' }) + '\\n')
+    `)
+
+    await expect(runCodexHandler({
+      ...callbacks({}),
+      config: fixtureConfig(root, executable),
+      context,
+      contextAccess,
+      outputPath: join(root, 'missing-thread-output.json'),
+      prompt: 'unused',
+      signal: new AbortController().signal
+    })).rejects.toMatchObject({ code: 'handler_failed' })
+  })
+
+  it('rejects legacy host sandbox config that would bypass the deny overlay', async () => {
+    const { executable, root } = await createExecutable('process.exit(92)')
+    const config = fixtureConfig(root, executable)
+    await mkdir(config.codexHome, { mode: 0o700 })
+    await writeFile(join(config.codexHome, 'config.toml'), 'sandbox_mode = "danger-full-access"\n')
+
+    await expect(runCodexHandler({
+      ...callbacks({}),
+      config,
+      context,
+      contextAccess,
+      outputPath: join(root, 'legacy-output.json'),
+      prompt: 'unused',
+      signal: new AbortController().signal
+    })).rejects.toMatchObject({ code: 'handler_failed' })
+  })
+
+  it('settles cancellation and escalates a resistant resumed turn', async () => {
     const { executable, root } = await createExecutable(`
       import { writeFile } from 'node:fs/promises'
       const args = process.argv.slice(2)
@@ -177,119 +200,87 @@ describe('Codex chunk handler adapter', () => {
       process.on('SIGTERM', () => undefined)
       setInterval(() => undefined, 1000)
     `)
-    const outputPath = join(root, 'resistant-output.json')
     const controller = new AbortController()
     let started
     let entered
     const enteredPromise = new Promise((resolve) => { entered = resolve })
     const running = runCodexHandler({
+      ...callbacks({}),
       config: fixtureConfig(root, executable),
       context,
       contextAccess,
-      onHeartbeat: async () => undefined,
-      onStarted: async (identity) => {
+      onTurnStarted: async (identity) => {
         started = identity
         entered()
       },
-      outputPath,
-      profile,
+      outputPath: join(root, 'resistant-output.json'),
       prompt: 'Cancellation fixture',
       signal: controller.signal,
-      terminationOptions: { graceMs: 50, killWaitMs: 500 }
+      terminationOptions: { graceMs: 50, killWaitMs: 500 },
+      threadId
     })
     await enteredPromise
     controller.abort()
 
     await expect(running).rejects.toBeInstanceOf(RunnerCanceledError)
-    const current = readProcessIdentity(started.pid)
-    expect(isProcessExecuting(current)).toBe(false)
+    expect(isProcessExecuting(readProcessIdentity(started.pid))).toBe(false)
   })
 
-  it('does not spawn when cancellation is already requested', async () => {
-    const { executable, root } = await createExecutable('throw new Error("must not run")')
-    const controller = new AbortController()
-    controller.abort()
-
-    await expect(runCodexHandler({
-      config: fixtureConfig(root, executable),
-      context,
-      contextAccess,
-      onHeartbeat: async () => undefined,
-      onStarted: async () => undefined,
-      outputPath: join(root, 'unused-output.json'),
-      profile,
-      prompt: 'unused',
-      signal: controller.signal
-    })).rejects.toBeInstanceOf(RunnerCanceledError)
-  })
-
-  it('rejects a handler that replaces its private output with a symlink', async () => {
-    const { executable, root } = await createExecutable(`
-      import { symlink, unlink, writeFile } from 'node:fs/promises'
-      const args = process.argv.slice(2)
-      const output = args[args.indexOf('--output-last-message') + 1]
-      const target = output + '.target'
-      for await (const chunk of process.stdin) void chunk
-      await writeFile(target, JSON.stringify({ messages: [], version: 1 }))
-      await unlink(output)
-      await symlink(target, output)
-    `)
-
-    await expect(runCodexHandler({
-      config: fixtureConfig(root, executable),
-      context,
-      contextAccess,
-      onHeartbeat: async () => undefined,
-      onStarted: async () => undefined,
-      outputPath: join(root, 'symlink-output.json'),
-      profile,
-      prompt: 'Generated prompt marker',
-      signal: new AbortController().signal
-    })).rejects.toMatchObject({ code: 'handler_output_invalid' })
-  })
-
-  it('selects model, reasoning, workspace, schema and streaming stdin explicitly', () => {
+  it('uses the real host config without ephemeral, rule, model, or reasoning overrides', () => {
     const config = fixtureConfig('/tmp/example', process.execPath)
-    const args = buildCodexArgs({ config, outputPath: '/tmp/example/output', profile })
+    const bootstrap = buildBootstrapArgs({ config })
+    const resume = buildCodexArgs({
+      config,
+      outputPath: '/tmp/example/output',
+      threadId
+    })
 
-    expect(args).toEqual(expect.arrayContaining([
-      '--ephemeral',
-      '--ignore-user-config',
-      '--ignore-rules',
-      '--strict-config',
-      '--model',
-      profile.model,
-      '-c',
-      'model_reasoning_effort="medium"',
+    expect(bootstrap).toEqual(expect.arrayContaining(['exec', '--json', '--cd', config.workspace]))
+    expect(resume).toEqual(expect.arrayContaining([
+      'exec',
+      'resume',
+      '--json',
       '--output-schema',
       config.handlerOutputSchemaPath,
       '--output-last-message',
-      '/tmp/example/output'
+      '/tmp/example/output',
+      threadId
     ]))
-    expect(args).toEqual(expect.arrayContaining([
-      'approval_policy="never"',
-      'default_permissions="agora-handler"',
-      expect.stringContaining('permissions.agora-handler.filesystem={ ":root" = "deny"'),
-      'permissions.agora-handler.network.domains={ "127.0.0.1" = "allow" }',
-      'shell_environment_policy.ignore_default_excludes=false',
-      'web_search="disabled"'
-    ]))
-    expect(args).not.toContain('--sandbox')
-    expect(args.at(-1)).toBe('-')
+    for (const forbidden of [
+      '--ephemeral',
+      '--ignore-user-config',
+      '--ignore-rules',
+      '--model',
+      'model_reasoning_effort'
+    ]) {
+      expect([...bootstrap, ...resume]).not.toContain(forbidden)
+    }
   })
 
-  it('grants a global npm launcher only its exact native runtime directory', async () => {
-    const layout = await createGlobalCodexLayout()
-    const config = fixtureConfig(layout.packageRoot, layout.publicLauncher)
-    const filesystem = handlerPermissionConfig(config).find((entry) => (
-      entry.startsWith('permissions.agora-handler.filesystem=')
+  it('denies transport credentials and Codex transcript stores to model tools', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agora-permissions-test-'))
+    roots.push(root)
+    const config = { ...fixtureConfig(root, process.execPath), workspace: root }
+    await Promise.all([
+      mkdir(join(config.codexHome, 'sessions'), { mode: 0o700, recursive: true }),
+      mkdir(config.credentialDirectory, { mode: 0o700 }),
+      mkdir(config.stateDirectory, { mode: 0o700 }),
+      writeFile(join(config.workspace, 'AGENTS.md'), 'fixture')
+    ])
+    await writeFile(join(config.codexHome, 'config.toml'), '')
+    const values = handlerPermissionConfig(config)
+    const filesystem = values.find((value) => value.startsWith(
+      'permissions.agora-inbox.filesystem='
     ))
 
-    expect(filesystem).toContain(
-      `${JSON.stringify(`${layout.runtimeDirectory}${sep}`)} = "read"`
-    )
-    expect(filesystem).not.toContain(
-      `${JSON.stringify(`${layout.platformRoot}${sep}`)} = "read"`
+    expect(filesystem).toContain(`":root" = "read"`)
+    expect(filesystem).toContain(`${JSON.stringify(config.credentialDirectory)} = "deny"`)
+    expect(filesystem).toContain(`${JSON.stringify(config.stateDirectory)} = "deny"`)
+    expect(filesystem).toContain(`${JSON.stringify(join(config.codexHome, 'sessions'))} = "deny"`)
+    expect(filesystem).toContain(`${JSON.stringify(join(config.codexHome, 'config.toml'))} = "read"`)
+    expect(values).toContain('permissions.agora-inbox.extends=":workspace"')
+    expect(values).toContain(
+      'permissions.agora-inbox.network.domains={ "*" = "allow", "127.0.0.1" = "allow", "localhost" = "allow" }'
     )
   })
 })

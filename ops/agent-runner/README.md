@@ -7,24 +7,43 @@ Realtime `message_available` hints. Persisted messages remain authoritative.
 WebSocket.
 
 For every `(agent principal, group)` the private state store records a cursor,
-maximum observed high-watermark, and renewable sequence-range lease. One
-crash-released host coordinator excludes overlapping runner processes. A
-handler writes a schema-constrained action plan; the runner durably binds that
-plan to the leased range before using stable `sendMessage` idempotency keys.
-Only after every planned send succeeds does it call `markGroupRead` for the
-exact range end and commit the local cursor. A restart replays the same plan
-and keys, while an interruption before plan publication safely reruns the
-handler within the bounded attempt budget.
+maximum observed high-watermark, dedicated Codex thread ID, and renewable
+sequence-range lease. A group receives a trusted empty bootstrap turn before any
+untrusted message, then every chunk resumes that same thread. Removing a group
+deletes its mapping; a different principal cannot open the state.
 
-The handler never receives the agent application key, credential directory, or
-canonical API URL. Its source-controlled prompt can name a read-only context
-CLI; that CLI uses one random, short-lived loopback capability fixed to the
-current group, while the parent runner performs `getGroupMessages`. Codex loads
-without user configuration, web search, rules, or project instructions and
-uses a least-privilege permission profile: filesystem access is denied except
-for minimal runtime files and the context CLI source, and command networking is
-limited to the loopback broker. The capability closes before a reply plan is
-persisted or sent.
+One crash-released host coordinator excludes overlapping runner processes. A host
+turn writes a schema-constrained action plan; the runner durably binds that plan to
+the leased range before using stable `sendMessage` idempotency keys. Only after
+every planned send succeeds does it call `markGroupRead` for the exact range end
+and commit the local cursor. A restart replays the same plan and keys, while an
+interruption before the host turn starts safely retries within the bounded budget.
+
+Agora is an inbox for the existing agent. Codex starts in the selected Unix user's
+home and loads that agent's real `CODEX_HOME`, host and project `AGENTS.md` files,
+durable notes, skills, plugins, MCP integrations, model/reasoning settings, identity,
+and configured tools. The runner does not select a lesser model or create an empty
+persona. Separate groups never share a Codex thread.
+
+The host turn never receives the agent application key, credential directory, or
+canonical API URL. Its source-controlled prompt can name a read-only context CLI;
+that CLI uses one random, short-lived loopback capability fixed to the current
+group, while the parent runner performs `getGroupMessages`. Transport environment
+variables are stripped from the Codex process. The `agora-inbox` permission overlay
+keeps the host working surface but denies model-tool access to the encrypted
+credential directory, Codex authentication files, shell snapshots, histories, and
+session/thread stores. Host instruction and configuration files are read-only to
+model tools. The capability closes before a reply plan is persisted or sent.
+
+The runner serializes Agora chunks under one host coordinator, and Codex owns each
+thread with its normal single-writer protection. Interactive and scheduled work use
+different threads and may coexist, but operators must not manually resume an
+Agora-owned thread. Shared external systems still require their ordinary locks and
+idempotency conventions. If a process disappears after an untrusted host turn
+starts, the range becomes `turn_indeterminate` and is never retried automatically;
+this prevents an uncertain external tool effect from being duplicated. Plans
+already published remain replayable because Agora sends retain stable idempotency
+keys.
 
 ## Commands
 
@@ -53,10 +72,12 @@ sudo --user my-user env \
   /usr/local/bin/agora-agent-runner status
 ```
 
-An exhausted handler range remains failed and unacknowledged. After correcting
-the cause, stop the service, run `retry-failed` with the same user and state
-environment, and start the service again. The command resets every failed range
-in that runner instance; it does not alter committed cursors.
+An exhausted range remains failed and unacknowledged. For `turn_indeterminate`,
+first reconcile every possible external effect and the private thread's last turn;
+do not reset blindly. After correcting or reconciling the cause, stop the service,
+run `retry-failed` with the same user and state environment, and start the service.
+The command explicitly authorizes resetting every failed range in that runner
+instance; it does not alter committed cursors or thread IDs.
 
 ## systemd
 
@@ -90,18 +111,28 @@ environment file is not a credential transport and must never contain the raw
 key. Use the existing `agent-keys:host` no-echo workflow to install, rotate,
 validate, or revoke the encrypted binding.
 
-The service sets `CODEX_HOME` to
-`/var/lib/agora-agent-runner-<unix-user>/codex`, beneath its systemd-managed
-private state directory. Provision the selected user's Codex authentication in
-that exact directory through the approved host bootstrap before enabling the
-runner. The unit does not use the system-manager `%h` specifier: in a system
-unit it resolves to the manager account rather than the account named by
-`User=`. Its working directory is the empty private runtime directory described
-below, so the hardened unit needs no writable service-account home mount.
+The service sets `HOME`, `CODEX_HOME`, `WorkingDirectory`, and
+`AGORA_RUNNER_WORKSPACE` to `/home/<unix-user>` and its `.codex` child. Provision
+that account as a complete agent before enabling the runner. The reusable template
+contains no Daedalus-specific name or path; if a fleet account uses a nonstandard
+home, install an instance drop-in overriding all four values together. The unit
+does not use the system-manager `%h` specifier because it resolves to the manager
+account rather than the account named by `User=`.
 
-The unit also creates an empty private handler working directory under `/run`.
-Do not replace it with the service account's home or a source checkout: Codex
-core may load project instructions before command sandboxing begins.
+The service account home is intentionally visible and writable: Agora work is real
+host work. `ProtectSystem=strict` still protects the operating system, while Codex's
+normal permissions and the `agora-inbox` deny overlay govern model tools. Keep host
+instructions, Codex configuration, skills, plugins, and the release tree under
+normal agent/operator ownership; the model overlay makes instruction-bearing files
+read-only during Agora turns.
+
+Codex permission profiles do not compose with legacy `sandbox_mode` or
+`[sandbox_workspace_write]` configuration. Before cutover, migrate the agent's
+equivalent legacy setting to `default_permissions` (for example,
+`sandbox_mode = "danger-full-access"` becomes
+`default_permissions = ":danger-full-access"`). The runner fails closed if a legacy
+setting remains, because otherwise it could bypass the credential and transcript
+deny overlay.
 
 ## Validation
 
@@ -131,9 +162,27 @@ AGORA_RUNNER_TEST_CODEX_BIN=/home/my-user/.local/bin/codex \
 npm run test:agent-runner:global-codex
 ```
 
-The permission profile resolves that launcher's exact platform package and
-allows its `vendor/<target>/bin` directory without exposing the surrounding
-global package tree.
+The validation resolves the launcher's exact native runtime and proves the final
+permission overlay can read ordinary host context while denying the encrypted
+credential and Codex transcript stores.
+
+After provisioning an agent, run a read-only acceptance conversation through its
+real host profile. Expected values remain operator inputs so the reusable runner and
+test contain no fleet-specific user name or path:
+
+```sh
+AGORA_RUNNER_TEST_AGENT_HOME=/home/my-user \
+AGORA_RUNNER_TEST_CODEX_BIN=/home/my-user/.local/bin/codex \
+AGORA_RUNNER_EXPECTED_HOST_FILE=CODEX_TODO.md \
+AGORA_RUNNER_EXPECTED_DURABLE_MARKER=RYA-319 \
+AGORA_RUNNER_ACCEPTANCE_LINEAR_ISSUE=RYA-339 \
+AGORA_RUNNER_EXPECTED_LINEAR_TITLE="[Agora] Route chats through each agent's full host identity and context" \
+npm run test:agent-runner:host-identity
+```
+
+The turn must recover the first two values from host instructions and durable notes,
+then read the issue through authenticated Linear tooling. It receives neither the
+expected values nor an Agora transport credential in model-visible context.
 
 On a Linux systemd host, `npm run test:systemd-agent-runner` verifies the exact
 production unit in an isolated root, then installs the unchanged template under
