@@ -7,7 +7,7 @@ import type {
 } from '../../common/agoraDtos'
 import { routeAgoraFunction } from './agoraFunctionMock'
 import { routeRuntimeConfig } from './runtimeConfig'
-import { deleteSupabaseUsersByEmail } from './supabaseTestAuth'
+import { cleanupVisualAccounts, createVisualAccount } from './visualAccount'
 
 const createdUserEmails = new Set<string>()
 const groupId = '11111111-1111-4111-8111-111111111111'
@@ -47,14 +47,7 @@ const invitation = (id: string, name: string): InvitationDto => ({
 })
 
 const createAccount = async (page: Page) => {
-  const email = `agora.groups@visual-${Date.now()}-${Math.random().toString(36).slice(2)}.example.com`
-  createdUserEmails.add(email)
-
-  await page.goto('/sign-in')
-  await page.getByRole('button', { name: 'Create an account' }).click()
-  await page.getByLabel('Email', { exact: true }).fill(email)
-  await page.getByLabel('Password', { exact: true }).fill('password')
-  await page.getByRole('button', { name: 'Create account' }).click()
+  const email = await createVisualAccount(page, createdUserEmails, 'groups')
   await expect(page).toHaveURL('/')
 
   return email
@@ -65,9 +58,7 @@ test.beforeEach(async ({ page }) => {
 })
 
 test.afterEach(async () => {
-  const emails = [...createdUserEmails]
-  await deleteSupabaseUsersByEmail(emails)
-  emails.forEach((email) => createdUserEmails.delete(email))
+  await cleanupVisualAccounts(createdUserEmails)
 })
 
 test('lets an owner create and administer a group with confirmed deletion', async ({ page }) => {
@@ -126,7 +117,9 @@ test('lets an owner create and administer a group with confirmed deletion', asyn
 
   await page.getByLabel('Email', { exact: true }).fill('New.Member@Example.test')
   await page.getByRole('button', { name: 'Create invitation' }).click()
-  await expect(page.getByRole('status')).toContainText('Coordinate with them out of band.')
+  await expect(page.getByRole('status').filter({ hasText: 'Invitation ready' })).toContainText(
+    'Coordinate with them out of band.'
+  )
 
   await page.getByLabel('Agent principal ID').fill(agentId)
   await page.getByRole('button', { name: 'Add agent' }).click()

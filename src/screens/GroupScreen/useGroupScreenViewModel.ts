@@ -16,6 +16,7 @@ import {
   removeMemberByPrincipalId,
   upsertMember
 } from '../../state/groupStateUpdates'
+import { useGroupConversation } from './useGroupConversation'
 
 export const useGroupScreenViewModel = () => {
   const navigate = useNavigate()
@@ -27,6 +28,7 @@ export const useGroupScreenViewModel = () => {
   const [notice, setNotice] = useState<string>()
   const loadState = useLoader()
   const actionState = useLoader()
+  const conversation = useGroupConversation(groupId)
 
   const loadGroup = useCallback(async () => {
     if (!groupId) {
@@ -134,6 +136,7 @@ export const useGroupScreenViewModel = () => {
     addAgent,
     canManage: currentMember?.role === 'owner',
     clearStatus,
+    conversation,
     currentMember,
     deleteGroup: deleteCurrentGroup,
     group,

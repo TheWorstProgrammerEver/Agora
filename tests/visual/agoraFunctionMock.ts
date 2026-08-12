@@ -12,6 +12,12 @@ type AgoraFunctionHandler = (
   params: Record<string, unknown>
 ) => unknown | Promise<unknown>
 
+export class AgoraFunctionMockError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message)
+  }
+}
+
 const readRequest = (route: Route) => (
   JSON.parse(route.request().postData() ?? '{}') as AgoraFunctionRequest
 )
@@ -31,7 +37,7 @@ export const routeAgoraFunction = async (page: Page, handler: AgoraFunctionHandl
       await route.fulfill({
         body: JSON.stringify({ error: error instanceof Error ? error.message : 'Mock request failed.' }),
         contentType: 'application/json',
-        status: 400
+        status: error instanceof AgoraFunctionMockError ? error.status : 400
       })
     }
   })

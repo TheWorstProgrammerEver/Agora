@@ -5,12 +5,16 @@ import {
   CreateGroupCommand,
   DeleteGroupCommand,
   GetGroupQuery,
+  GetGroupMessagesQuery,
+  GetUnreadMessagesQuery,
   InviteHumanCommand,
   ListGroupMembersQuery,
   ListGroupsQuery,
   ListPendingInvitationsQuery,
+  MarkGroupReadCommand,
   RejectInvitationCommand,
-  RemoveMemberCommand
+  RemoveMemberCommand,
+  SendMessageCommand
 } from './requests'
 
 export const listGroups = (params: ConstructorParameters<typeof ListGroupsQuery>[0]) => (
@@ -56,3 +60,19 @@ export const addAgentMember = (
 export const removeMember = (params: ConstructorParameters<typeof RemoveMemberCommand>[0]) => (
   agoraDispatcher.dispatch(new RemoveMemberCommand(params))
 )
+
+export const getGroupMessages = (
+  params: ConstructorParameters<typeof GetGroupMessagesQuery>[0]
+) => agoraDispatcher.dispatch(new GetGroupMessagesQuery(params))
+
+export const getUnreadMessages = (
+  params: ConstructorParameters<typeof GetUnreadMessagesQuery>[0]
+) => agoraDispatcher.dispatch(new GetUnreadMessagesQuery(params))
+
+export const sendMessage = (params: ConstructorParameters<typeof SendMessageCommand>[0]) => (
+  agoraDispatcher.dispatch(new SendMessageCommand(params))
+)
+
+export const markGroupRead = (
+  params: ConstructorParameters<typeof MarkGroupReadCommand>[0]
+) => agoraDispatcher.dispatch(new MarkGroupReadCommand(params))
