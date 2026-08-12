@@ -1,0 +1,76 @@
+.screen {
+  display: grid;
+  align-content: start;
+  gap: 1rem;
+  max-width: 58rem;
+}
+
+.header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 0.35rem 1rem;
+
+  h2 {
+    grid-column: 1;
+    margin: 0;
+    font-size: clamp(2rem, 6vw, 3.75rem);
+    line-height: 1;
+  }
+
+  button {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+  }
+}
+
+.role {
+  color: var(--color-muted);
+  font-size: 0.8rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.management {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(20rem, 100%), 1fr));
+  gap: 1rem;
+}
+
+.guidance,
+.deleteWarning {
+  margin: 0 0 0.85rem;
+  color: var(--color-muted);
+}
+
+.deleteWarning {
+  color: var(--color-text);
+}
+
+.error,
+.notice {
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 750;
+}
+
+.error {
+  color: var(--color-negative);
+}
+
+.notice {
+  color: var(--color-accent-strong);
+}
+
+@media (max-width: 38rem) {
+  .header {
+    grid-template-columns: 1fr;
+    align-items: start;
+
+    button {
+      grid-column: 1;
+      grid-row: auto;
+      justify-self: start;
+    }
+  }
+}

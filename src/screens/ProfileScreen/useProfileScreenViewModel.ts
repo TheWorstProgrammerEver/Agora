@@ -11,7 +11,7 @@ import {
 } from '../../data/supabaseAuthRepository'
 
 export const useProfileScreenViewModel = () => {
-  const { currentAccount, signOut } = useAuthContext()
+  const { currentAccount, signOut, supportedTypes } = useAuthContext()
   const [passkeys, setPasskeys] = useState<AccountPasskey[]>([])
   const [passkeyNotice, setPasskeyNotice] = useState<string>()
   const passkeyLoader = useLoader()
@@ -22,7 +22,7 @@ export const useProfileScreenViewModel = () => {
   } = passkeyLoader
 
   const loadPasskeys = useCallback(async () => {
-    if (!currentAccount) {
+    if (!currentAccount || !supportedTypes.passkey) {
       setPasskeys([])
       return
     }
@@ -33,7 +33,7 @@ export const useProfileScreenViewModel = () => {
     } catch {
       setPasskeys([])
     }
-  }, [currentAccount, executePasskeyAction])
+  }, [currentAccount, executePasskeyAction, supportedTypes.passkey])
 
   useEffect(() => {
     void loadPasskeys()
@@ -104,6 +104,7 @@ export const useProfileScreenViewModel = () => {
     currentAccount,
     deletePasskey: deleteExistingPasskey,
     passkeyError: passkeyLoader.error,
+    passkeyEnabled: supportedTypes.passkey,
     passkeyNotice,
     passkeyBusy: passkeyLoader.busy,
     passkeys,

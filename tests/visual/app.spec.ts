@@ -141,11 +141,28 @@ test('protects app routes until the user signs in', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Sign In' })).toBeVisible()
 })
 
-test('shows the empty authenticated shell after account creation', async ({ page }) => {
+test('shows the empty authenticated group state after account creation', async ({ page }) => {
   const email = await createAccount(page)
 
   await expect(page).toHaveURL('/')
-  await expect(page.getByRole('heading', { name: 'Welcome to Agora' })).toBeVisible()
-  await expect(page.getByText('Your account is ready.')).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Groups', exact: true })).toBeVisible()
+  await expect(page.getByText('You do not belong to any groups yet.')).toBeVisible()
   await expect(page.getByRole('link', { name: `Open profile for ${email}` })).toBeVisible()
+})
+
+test('hides passkey account controls when the capability is disabled', async ({ page }) => {
+  await routeRuntimeConfig(page, {
+    supportedTypes: {
+      emailPassword: true,
+      magicLink: false,
+      otp: false,
+      passkey: false
+    }
+  })
+  await createAccount(page)
+  await page.getByRole('link', { name: /Open profile for/ }).click()
+
+  await expect(page.getByRole('heading', { name: 'Profile' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Passkeys' })).not.toBeVisible()
+  await expect(page.getByRole('button', { name: 'Add passkey' })).not.toBeVisible()
 })

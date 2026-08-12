@@ -26,8 +26,23 @@
   }
 }
 
-.copy {
-  max-width: 42rem;
-  margin: 0;
+.guidance,
+.empty {
+  margin: 0 0 0.85rem;
   color: var(--color-muted);
+}
+
+.error,
+.notice {
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 750;
+}
+
+.error {
+  color: var(--color-negative);
+}
+
+.notice {
+  color: var(--color-accent-strong);
 }
