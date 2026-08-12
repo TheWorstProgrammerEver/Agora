@@ -1,32 +1,19 @@
 import { expect, test } from '@playwright/test'
 import { routeRuntimeConfig } from './runtimeConfig'
-import { deleteSupabaseUsersByEmail } from './supabaseTestAuth'
+import { cleanupVisualAccounts, createVisualAccount } from './visualAccount'
 
 const createdUserEmails = new Set<string>()
 
-const createAccount = async (page: import('@playwright/test').Page) => {
-  const email = `agora.user@visual-${Date.now()}-${Math.random().toString(36).slice(2)}.example.com`
-  createdUserEmails.add(email)
-
-  await page.goto('/')
-  await page.evaluate(() => window.localStorage.clear())
-  await page.reload()
-  await page.getByRole('button', { name: 'Create an account' }).click()
-  await page.getByLabel('Email', { exact: true }).fill(email)
-  await page.getByLabel('Password', { exact: true }).fill('password')
-  await page.getByRole('button', { name: 'Create account' }).click()
-
-  return email
-}
+const createAccount = (page: import('@playwright/test').Page) => (
+  createVisualAccount(page, createdUserEmails, 'user')
+)
 
 test.beforeEach(async ({ page }) => {
   await routeRuntimeConfig(page)
 })
 
 test.afterEach(async () => {
-  const emails = [...createdUserEmails]
-  await deleteSupabaseUsersByEmail(emails)
-  emails.forEach((email) => createdUserEmails.delete(email))
+  await cleanupVisualAccounts(createdUserEmails)
 })
 
 test('renders configured authentication methods', async ({ page }) => {

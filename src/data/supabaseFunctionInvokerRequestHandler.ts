@@ -1,7 +1,18 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { IRequest, RequestHandler } from '../../lib/dispatch/dispatch'
 
-const messageFromFunctionError = async (error: unknown) => {
+type FunctionErrorDetails = {
+  message: string
+  status?: number
+}
+
+export class FunctionRequestError extends Error {
+  constructor(message: string, readonly status?: number) {
+    super(message)
+  }
+}
+
+const detailsFromFunctionError = async (error: unknown): Promise<FunctionErrorDetails> => {
   const context = typeof error === 'object' && error && 'context' in error
     ? error.context
     : undefined
@@ -11,15 +22,23 @@ const messageFromFunctionError = async (error: unknown) => {
       const body = await context.json() as { error?: string }
 
       if (body.error) {
-        return body.error
+        return { message: body.error, status: context.status }
       }
     } catch {
-      return context.statusText
+      return { message: context.statusText, status: context.status }
     }
+
+    return { message: context.statusText, status: context.status }
   }
 
-  return error instanceof Error ? error.message : 'Function request failed.'
+  return {
+    message: error instanceof Error ? error.message : 'Function request failed.'
+  }
 }
+
+export const isFunctionAccessDenied = (error: unknown) => (
+  error instanceof FunctionRequestError && (error.status === 403 || error.status === 404)
+)
 
 export const createSupabaseFunctionInvokerRequestHandler = (
   client: SupabaseClient,
@@ -35,7 +54,8 @@ export const createSupabaseFunctionInvokerRequestHandler = (
   })
 
   if (error) {
-    throw new Error(await messageFromFunctionError(error))
+    const details = await detailsFromFunctionError(error)
+    throw new FunctionRequestError(details.message, details.status)
   }
 
   if (!data) {

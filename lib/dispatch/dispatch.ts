@@ -10,7 +10,7 @@ export type RequestHandlers = Record<string, RequestHandler>
 
 export type RequestType<TResult, TParams> = {
   readonly identifier: string
-  new (...[params]: TParams extends void ? [] : [TParams]): IRequest<TResult, TParams>
+  new (...[params]: [TParams] extends [void] ? [] : [TParams]): IRequest<TResult, TParams>
 }
 
 export type RequestHandlerRegistration = {
@@ -26,7 +26,7 @@ export const createQueryType = <TIdentifier extends string>(identifier: TIdentif
       declare readonly resultType?: TResult
       readonly params: TParams
 
-      constructor(...[params]: TParams extends void ? [] : [TParams]) {
+      constructor(...[params]: [TParams] extends [void] ? [] : [TParams]) {
         this.params = params as TParams
       }
     }

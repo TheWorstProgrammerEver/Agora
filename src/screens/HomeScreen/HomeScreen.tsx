@@ -128,7 +128,14 @@ export const HomeScreen = () => {
                   details={(
                     <>
                       <strong>{group.name}</strong>
-                      <small>{role}{group.unreadCount > 0 ? ` · ${group.unreadCount} unread` : ''}</small>
+                      <small className={styles.groupMeta}>
+                        <span>{role}</span>
+                        {group.unreadCount > 0 && (
+                          <span className={styles.unreadBadge} aria-label={`${group.unreadCount} unread messages`}>
+                            {group.unreadCount} unread
+                          </span>
+                        )}
+                      </small>
                     </>
                   )}
                   actions={(

@@ -8,6 +8,7 @@ import { List, ListItem } from '../../../lib/ui/List/List'
 import { IconAndLabel } from '../../../lib/ui/ResponsiveContent/IconContent'
 import { ResponsiveButton } from '../../../lib/ui/ResponsiveButton/ResponsiveButton'
 import { Section } from '../../../lib/ui/Section/Section'
+import { ConversationPanel } from './ConversationPanel'
 import { useGroupScreenViewModel } from './useGroupScreenViewModel'
 import styles from './GroupScreen.module.scss'
 
@@ -41,11 +42,15 @@ export const GroupScreen = () => {
     return <section className={styles.screen} aria-busy="true" aria-label="Loading group" />
   }
 
-  if (!viewModel.group) {
+  if (!viewModel.group || viewModel.conversation.accessRevoked) {
     return (
       <section className={styles.screen} aria-labelledby="group-unavailable-title">
         <h2 id="group-unavailable-title">Group unavailable</h2>
-        <p role="alert">{viewModel.loadState.error ?? 'This group could not be loaded.'}</p>
+        <p role="alert">
+          {viewModel.conversation.accessRevoked
+            ? 'You no longer have access to this group.'
+            : viewModel.loadState.error ?? 'This group could not be loaded.'}
+        </p>
       </section>
     )
   }
@@ -71,7 +76,9 @@ export const GroupScreen = () => {
       )}
       {viewModel.notice && <p className={styles.notice} role="status">{viewModel.notice}</p>}
 
-      <Section title="Members" titleId="group-members-title">
+      <ConversationPanel conversation={viewModel.conversation} groupName={viewModel.group.name} />
+
+      <Section title="Participants" titleId="group-members-title">
         <List ariaLabel={`${viewModel.group.name} members`}>
           {viewModel.members.map((member) => (
             <ListItem

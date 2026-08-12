@@ -1,0 +1,126 @@
+.panel {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+  padding: clamp(1rem, 3vw, 1.5rem);
+  border: 1px solid var(--color-border);
+  border-radius: calc(var(--control-border-radius) * 1.5);
+  background: var(--color-surface);
+}
+
+.header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 1rem;
+
+  h3,
+  p {
+    margin: 0;
+  }
+}
+
+.connection {
+  min-height: 1.25rem;
+  color: var(--color-muted);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.history {
+  display: grid;
+  gap: 0.75rem;
+  min-height: 12rem;
+}
+
+.messages {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+
+  li {
+    display: grid;
+    gap: 0.35rem;
+    padding: 0.8rem 0.9rem;
+    border-inline-start: 0.2rem solid transparent;
+    border-radius: var(--control-border-radius);
+    background: var(--color-surface-raised);
+  }
+
+  p {
+    margin: 0;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+  }
+}
+
+.messages .unreadMessage {
+  border-inline-start-color: var(--color-accent-strong);
+}
+
+.messageHeader {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem 0.65rem;
+
+  time {
+    color: var(--color-muted);
+    font-size: 0.75rem;
+  }
+}
+
+.unreadLabel {
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+  background: var(--color-action-secondary-hover);
+  color: var(--color-accent-strong);
+  font-size: 0.7rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.composer {
+  display: grid;
+  gap: 0.55rem;
+
+  label {
+    font-weight: 800;
+  }
+
+  textarea {
+    min-width: 0;
+    resize: vertical;
+  }
+
+  button {
+    justify-self: end;
+  }
+}
+
+.empty,
+.error {
+  margin: 0;
+}
+
+.empty {
+  color: var(--color-muted);
+}
+
+.error {
+  color: var(--color-negative);
+  font-size: 0.9rem;
+  font-weight: 750;
+}
+
+@media (max-width: 38rem) {
+  .header {
+    display: grid;
+  }
+
+  .composer button {
+    justify-self: stretch;
+  }
+}
