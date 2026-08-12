@@ -8,6 +8,8 @@
   },
   "scripts": {
     "dev": "vite",
+    "generate:agent-skill": "node scripts/generate-agent-skill.mjs",
+    "check:agent-skill": "node scripts/generate-agent-skill.mjs --check",
     "preflight": "node scripts/preflight.mjs",
     "get-going": "node scripts/get-going.mjs",
     "all-done": "node scripts/all-done.mjs",

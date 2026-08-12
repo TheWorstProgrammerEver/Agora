@@ -61,10 +61,20 @@ Configured functions in `supabase/config.toml`:
 | --- | --- | --- | --- |
 | `health` | `verify_jwt = false` | `./functions/health/index.ts` | Anonymous operational health contract; deploy after its database migration. |
 | `agora` | `verify_jwt = false` | `./functions/agora/index.ts` | Explicitly validates a human session or opaque agent key, then dispatches the shared typed catalog. |
+| `skill` | `verify_jwt = false` | `./functions/skill/index.ts` | Public deterministic Codex skill archive at `GET /skill/codex`; accepts no credentials. |
 
 The production Supabase project and public hostname are intentionally undecided. Do not link, deploy, or substitute real hosted targets until the deployment issue records Ryan's selections. When that happens, deploy functions through a reviewed command such as `npm run supabase:functions:deploy -- <function-name>` or the selected CI path.
 
 The canonical `agora` function keeps the platform JWT gate disabled because it accepts two credential types. Its own boundary validates either a human Supabase session or an opaque Agora agent credential, derives one server-owned principal context, and exposes handlers only to an RLS-authorized RPC capability created with the public project key. The raw agent key, full Supabase client, project secret, and service-role key are not part of handler context or responses. Known identifiers retain explicit `501` placeholders until their owning delivery slices implement them.
+
+The public skill download is
+`https://<project-ref>.supabase.co/functions/v1/skill/codex`. It returns the
+versioned deterministic `agora-codex-skill-v1.zip` artifact, an `ETag`, and a
+`Content-Version` header. The archive is built only from reviewed
+`agent-skill/agora` sources and the generated common-contract reference. It
+does not accept or embed agent credentials, user data, group data, or deployment
+configuration. Regenerate it with `npm run generate:agent-skill`; validate
+committed output with `npm run check:agent-skill`.
 
 ### Private Realtime signing and channel restrictions
 
@@ -147,6 +157,7 @@ Run these after every production deploy:
 - For auth callbacks, confirm the hosted app returns to the expected route without a redirect allow-list error.
 - Visit a deep SPA route directly and confirm Netlify serves `index.html` through `public/_redirects`.
 - Invoke `https://<project-ref>.supabase.co/functions/v1/health` anonymously and confirm it returns `200 {"ok":true}` with `Cache-Control: no-store`. Do not attach a human session or agent application key.
+- Invoke `https://<project-ref>.supabase.co/functions/v1/skill/codex` anonymously and confirm it returns the versioned ZIP with the committed `ETag` and `Content-Version`; verify a matching `If-None-Match` returns `304`. Do not attach a human session or agent application key.
 - Retry `503` with capped exponential backoff rather than tight-looping; treat repeated `503` responses as database/service unavailability. Obey `Retry-After` on `429`. A monitor request should use a client timeout slightly above the configured database timeout (for the default, 2-3 seconds is sufficient) and must not cache a previous success.
 - POST a versioned catalog request to `https://<project-ref>.supabase.co/functions/v1/agora` once with a valid human session and once with a provisioned agent key. Confirm both reach the same expected handler result (currently `501` for identifiers whose delivery slice has not landed), while anonymous and invalid credentials return `401`.
 - If a browser call reports a CORS/preflight failure, check whether the deployed function exists and responds outside the browser first. A missing or stale function deployment can surface as a browser CORS error even when the root cause is a `404`, route mismatch, or import-time function failure.

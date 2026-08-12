@@ -393,6 +393,12 @@ enabled = true
 verify_jwt = false
 entrypoint = "./functions/agora/index.ts"
 
+[functions.skill]
+enabled = true
+# Public deterministic Codex skill artifact. The handler accepts no credentials.
+verify_jwt = false
+entrypoint = "./functions/skill/index.ts"
+
 [analytics]
 enabled = true
 port = 54327

@@ -7,7 +7,7 @@ import {
 
 describe('get-going function route checks', () => {
   it('discovers every configured foundation route', () => {
-    expect(getEnabledFunctionNames().sort()).toEqual(['agora', 'health'])
+    expect(getEnabledFunctionNames().sort()).toEqual(['agora', 'health', 'skill'])
   })
 
   it('requires health success and accepts a mounted POST-only route', () => {
