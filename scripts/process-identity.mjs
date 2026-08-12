@@ -5,7 +5,7 @@ import { platform } from 'node:os'
 const terminalProcessStates = new Set(['X', 'Z'])
 let cachedBootId
 
-const readLinuxBootId = () => {
+export const readLinuxBootId = () => {
   cachedBootId ??= readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim()
   return cachedBootId
 }

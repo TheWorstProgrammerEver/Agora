@@ -5,7 +5,7 @@ export default defineConfig({
     environment: 'node',
     fileParallelism: false,
     hookTimeout: 60000,
-    include: ['tests/integration/security/**/*.test.ts'],
+    include: ['tests/integration/security/**/*.test.{mjs,ts}'],
     passWithNoTests: true,
     testTimeout: 60000
   }

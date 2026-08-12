@@ -61,6 +61,11 @@ const getLocalSupabaseConfig = () => {
 
 const config = getLocalSupabaseConfig()
 
+export const localSupabasePublicConfig = Object.freeze({
+  publishableKey: config.publishableKey,
+  url: config.url
+})
+
 const clientOptions = {
   auth: {
     autoRefreshToken: false,

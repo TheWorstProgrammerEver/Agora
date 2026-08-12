@@ -1,0 +1,45 @@
+[Unit]
+Description=Agora agent message runner for %i
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=5min
+StartLimitBurst=10
+
+[Service]
+Type=simple
+User=%i
+Group=%i
+WorkingDirectory=/run/agora-agent-runner-handler-%i
+EnvironmentFile=/etc/agora-agent-runner/%i.conf
+Environment=CODEX_HOME=/var/lib/agora-agent-runner-%i/codex
+Environment=AGORA_RUNNER_STATE_DIRECTORY=/var/lib/agora-agent-runner-%i
+Environment=AGORA_RUNNER_WORKSPACE=/run/agora-agent-runner-handler-%i
+LoadCredentialEncrypted=agora-agent-key:/etc/credstore.encrypted/agora-agent-key.cred
+ExecStart=/usr/local/bin/agora-agent-runner run
+Restart=always
+RestartSec=5s
+TimeoutStopSec=30s
+KillMode=control-group
+UMask=0077
+StateDirectory=agora-agent-runner-%i
+StateDirectoryMode=0700
+RuntimeDirectory=agora-agent-runner-handler-%i
+RuntimeDirectoryMode=0700
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHome=read-only
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target
