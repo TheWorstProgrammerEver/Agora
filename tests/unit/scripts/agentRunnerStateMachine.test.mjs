@@ -2,9 +2,12 @@ import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { createEmptyRunnerState, validateRunnerState } from '../../../scripts/agent-runner/state-schema.mjs'
 import {
+  attachLeaseChild,
   attachPlan,
+  bindGroupThread,
   commitLease,
   failLease,
+  markLeaseBootstrapping,
   markLeaseHandling,
   observeHighWatermark,
   prepareLease,
@@ -48,7 +51,6 @@ const planAndCommit = (state, lease) => {
     groupId,
     lease.chunkId,
     ownerRunId,
-    processIdentity,
     new Date(61_000).toISOString()
   )
   attachPlan(state, groupId, lease.chunkId, ownerRunId, {
@@ -88,13 +90,106 @@ describe('agent runner state machine', () => {
   it('bootstraps from the authoritative server read watermark', () => {
     const state = seededState('18', 5)
 
-    expect(state.groups[groupId]).toEqual({
+    expect(state.groups[groupId]).toMatchObject({
       cursor: '13',
       observedHighWatermark: '18'
     })
+    expect(state.groups[groupId].workspaceId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+    )
   })
 
-  it('recovers an interrupted lease without overlapping its range', () => {
+  it('binds one thread to one group and preserves it across leases', () => {
+    const state = seededState('2', 2)
+    const lease = prepareLease(state, groupId, leaseOptions())
+    const threadId = randomUUID()
+    markLeaseBootstrapping(
+      state,
+      groupId,
+      lease.chunkId,
+      ownerRunId,
+      new Date(61_000).toISOString()
+    )
+    attachLeaseChild(
+      state,
+      groupId,
+      lease.chunkId,
+      ownerRunId,
+      'bootstrapping',
+      processIdentity,
+      new Date(61_000).toISOString()
+    )
+    expect(state.groups[groupId].lease.child).toEqual(processIdentity)
+    bindGroupThread(state, groupId, lease.chunkId, ownerRunId, threadId)
+    expect(state.groups[groupId].threadId).toBe(threadId)
+    expect(state.groups[groupId].lease.phase).toBe('leased')
+    expect(() => markLeaseBootstrapping(
+      state,
+      groupId,
+      lease.chunkId,
+      ownerRunId,
+      new Date(62_000).toISOString()
+    )).toThrow('phase is invalid')
+    validateRunnerState(state)
+  })
+
+  it('keeps thread bindings distinct across groups', () => {
+    const otherGroupId = randomUUID()
+    const state = createEmptyRunnerState()
+    reconcileGroups(state, {
+      groups: [groupId, otherGroupId].map((id) => ({
+        highWatermarkSequence: '1',
+        id,
+        unreadCount: 1
+      })),
+      principalId
+    })
+
+    for (const [id, threadId] of [
+      [groupId, randomUUID()],
+      [otherGroupId, randomUUID()]
+    ]) {
+      const lease = prepareLease(state, id, leaseOptions())
+      markLeaseBootstrapping(
+        state,
+        id,
+        lease.chunkId,
+        ownerRunId,
+        new Date(61_000).toISOString()
+      )
+      bindGroupThread(state, id, lease.chunkId, ownerRunId, threadId)
+    }
+
+    expect(state.groups[groupId].threadId).not.toBe(state.groups[otherGroupId].threadId)
+    validateRunnerState(state)
+  })
+
+  it('deletes a removed group thread and never carries it into a re-added group', () => {
+    const state = seededState('0', 0)
+    const threadId = randomUUID()
+    const workspaceId = state.groups[groupId].workspaceId
+    state.groups[groupId].threadId = threadId
+
+    reconcileGroups(state, { groups: [], principalId })
+    expect(state.groups[groupId]).toBeUndefined()
+    reconcileGroups(state, {
+      groups: [{ highWatermarkSequence: '0', id: groupId, unreadCount: 0 }],
+      principalId
+    })
+    expect(state.groups[groupId].threadId).toBeUndefined()
+    expect(state.groups[groupId].workspaceId).not.toBe(workspaceId)
+  })
+
+  it('rejects state reuse by another principal', () => {
+    const state = seededState('0', 0)
+
+    expect(() => reconcileGroups(state, {
+      groups: [{ highWatermarkSequence: '0', id: groupId, unreadCount: 0 }],
+      principalId: randomUUID()
+    })).toThrow('principal does not match')
+  })
+
+  it('fails closed when a host turn is interrupted after effects become possible', () => {
     const state = seededState('4', 4)
     const lease = prepareLease(state, groupId, leaseOptions())
     markLeaseHandling(
@@ -102,7 +197,6 @@ describe('agent runner state machine', () => {
       groupId,
       lease.chunkId,
       ownerRunId,
-      processIdentity,
       new Date(61_000).toISOString()
     )
     const replacementRunId = randomUUID()
@@ -119,20 +213,50 @@ describe('agent runner state machine', () => {
       attempt: 1,
       fromExclusive: '0',
       ownerRunId: replacementRunId,
-      phase: 'retryable',
+      failureCode: 'turn_indeterminate',
+      phase: 'failed',
       through: '4'
     })
-    const retry = prepareLease(state, groupId, leaseOptions({
+    expect(prepareLease(state, groupId, leaseOptions({
       now: 90_000,
       ownerPid: 2002,
       ownerRunId: replacementRunId
-    }))
-    expect(retry).toMatchObject({
-      attempt: 2,
-      chunkId: lease.chunkId,
-      fromExclusive: '0',
-      through: '4'
+    }))).toBeUndefined()
+  })
+
+  it('fails closed when bootstrap is interrupted after tool effects become possible', () => {
+    const state = seededState('4', 4)
+    const lease = prepareLease(state, groupId, leaseOptions())
+    markLeaseBootstrapping(
+      state,
+      groupId,
+      lease.chunkId,
+      ownerRunId,
+      new Date(61_000).toISOString()
+    )
+    const replacementRunId = randomUUID()
+
+    recoverLease(state, groupId, {
+      leaseDurationMs: 60_000,
+      maximumAttempts: 3,
+      now: 90_000,
+      ownerPid: 2002,
+      ownerRunId: replacementRunId,
+      retryAt: new Date(90_000).toISOString()
     })
+
+    expect(state.groups[groupId].threadId).toBeUndefined()
+    expect(state.groups[groupId].lease).toMatchObject({
+      attempt: 1,
+      failureCode: 'turn_indeterminate',
+      ownerRunId: replacementRunId,
+      phase: 'failed'
+    })
+    expect(prepareLease(state, groupId, leaseOptions({
+      now: 90_000,
+      ownerPid: 2002,
+      ownerRunId: replacementRunId
+    }))).toBeUndefined()
   })
 
   it('exhausts a bounded handler retry budget without advancing the cursor', () => {

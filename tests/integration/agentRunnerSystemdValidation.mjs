@@ -19,9 +19,10 @@ const validateProductionUnit = async () => {
       mkdir(`${root}/etc/agora-agent-runner`, { recursive: true }),
       mkdir(`${root}/etc/credstore.encrypted`, { recursive: true }),
       mkdir(`${root}/etc/systemd/system`, { recursive: true }),
+      mkdir(`${root}/home/root/.codex`, { recursive: true }),
       mkdir(`${root}/run/agora-agent-runner-handler-root`, { recursive: true }),
       mkdir(`${root}/usr/local/bin`, { recursive: true }),
-      mkdir(`${root}/var/lib/agora-agent-runner-root/codex`, { recursive: true })
+      mkdir(`${root}/var/lib/agora-agent-runner-root`, { recursive: true })
     ])
     await Promise.all([
       copyFile(productionUnitPath, `${root}/etc/systemd/system/agora-agent-runner@.service`),
@@ -29,7 +30,7 @@ const validateProductionUnit = async () => {
         'AGORA_RUNNER_API_URL=https://example.invalid/functions/v1/agora\n'
       )),
       writeFile(`${root}/etc/group`, 'root:x:0:\n'),
-      writeFile(`${root}/etc/passwd`, 'root:x:0:0:root:/root:/bin/sh\n'),
+      writeFile(`${root}/etc/passwd`, 'root:x:0:0:root:/home/root:/bin/sh\n'),
       ...['basic', 'multi-user', 'network-online', 'sysinit'].map((target) => (
         writeFile(
           `${root}/etc/systemd/system/${target}.target`,

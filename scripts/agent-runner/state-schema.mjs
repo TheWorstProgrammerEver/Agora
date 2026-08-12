@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import {
   agentKeySearchPattern,
   handlerFailureCodes,
@@ -13,7 +14,14 @@ import {
   isUuid
 } from './value-validation.mjs'
 
-const leasePhases = new Set(['failed', 'handling', 'leased', 'planned', 'retryable'])
+const leasePhases = new Set([
+  'bootstrapping',
+  'failed',
+  'handling',
+  'leased',
+  'planned',
+  'retryable'
+])
 const digestPattern = /^sha256:[0-9a-f]{64}$/
 const chunkIdPattern = /^[0-9a-f]{64}$/
 
@@ -99,7 +107,7 @@ const isLease = (value, group) => {
       && value.child === undefined
   }
 
-  if (value.phase === 'handling') {
+  if (value.phase === 'bootstrapping' || value.phase === 'handling') {
     return value.failureCode === undefined && value.retryAt === undefined
       && value.plan === undefined
   }
@@ -114,16 +122,18 @@ const isGroupState = (value) => {
   if (!isObject(value)
     || !hasExactKeys(
       value,
-      ['cursor', 'observedHighWatermark'],
-      ['lastFailureCode', 'lastHandledThrough', 'lease']
+      ['cursor', 'observedHighWatermark', 'workspaceId'],
+      ['lastFailureCode', 'lastHandledThrough', 'lease', 'threadId']
     )
     || !isSequence(value.cursor)
     || !isSequence(value.observedHighWatermark)
+    || !isUuid(value.workspaceId)
     || compareSequences(value.cursor, value.observedHighWatermark) > 0
     || (value.lastHandledThrough !== undefined && (
       !isSequence(value.lastHandledThrough)
       || compareSequences(value.lastHandledThrough, value.cursor) > 0
     ))
+    || (value.threadId !== undefined && !isUuid(value.threadId))
     || (value.lastFailureCode !== undefined && (
       typeof value.lastFailureCode !== 'string'
       || !handlerFailureCodes.has(value.lastFailureCode)
@@ -148,6 +158,26 @@ export const createEmptyRunnerState = () => ({
   principalId: null,
   version: runnerStateVersion
 })
+
+export const migrateRunnerState = (value) => {
+  if (isObject(value) && [1, 2].includes(value.version) && isObject(value.groups)) {
+    return {
+      ...value,
+      groups: Object.fromEntries(Object.entries(value.groups).map(([groupId, group]) => [
+        groupId,
+        isObject(group)
+          ? Object.fromEntries([
+              ...Object.entries(group).filter(([key]) => key !== 'threadId'),
+              ['workspaceId', randomUUID()]
+            ])
+          : group
+      ])),
+      version: runnerStateVersion
+    }
+  }
+
+  return value
+}
 
 export const validateRunnerState = (value) => {
   if (!isObject(value)

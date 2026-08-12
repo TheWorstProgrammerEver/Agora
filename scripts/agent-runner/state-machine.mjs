@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { handlerPlanVersion } from './constants.mjs'
 import {
   boundedChunkEnd,
@@ -44,7 +44,8 @@ export const reconcileGroups = (state, { groups, principalId }) => {
     if (!existing) {
       state.groups[group.id] = {
         cursor: serverReadThrough,
-        observedHighWatermark: group.highWatermarkSequence
+        observedHighWatermark: group.highWatermarkSequence,
+        workspaceId: randomUUID()
       }
       continue
     }
@@ -146,7 +147,6 @@ export const markLeaseHandling = (
   groupId,
   chunkId,
   ownerRunId,
-  child,
   expiresAt
 ) => {
   const lease = requireOwnedLease(state, groupId, chunkId, ownerRunId)
@@ -155,15 +155,68 @@ export const markLeaseHandling = (
     throw new Error('Agora runner lease phase is invalid.')
   }
 
-  lease.child = child
   lease.expiresAt = expiresAt
   lease.phase = 'handling'
+}
+
+export const markLeaseBootstrapping = (
+  state,
+  groupId,
+  chunkId,
+  ownerRunId,
+  expiresAt
+) => {
+  const lease = requireOwnedLease(state, groupId, chunkId, ownerRunId)
+
+  if (lease.phase !== 'leased' || state.groups[groupId].threadId !== undefined) {
+    throw new Error('Agora runner lease phase is invalid.')
+  }
+
+  lease.expiresAt = expiresAt
+  lease.phase = 'bootstrapping'
+}
+
+export const attachLeaseChild = (
+  state,
+  groupId,
+  chunkId,
+  ownerRunId,
+  phase,
+  child,
+  expiresAt
+) => {
+  const lease = requireOwnedLease(state, groupId, chunkId, ownerRunId)
+
+  if (!['bootstrapping', 'handling'].includes(phase)
+    || lease.phase !== phase
+    || lease.child !== undefined) {
+    throw new Error('Agora runner lease phase is invalid.')
+  }
+
+  lease.child = child
+  lease.expiresAt = expiresAt
+}
+
+export const bindGroupThread = (state, groupId, chunkId, ownerRunId, threadId) => {
+  const group = state.groups[groupId]
+  const lease = requireOwnedLease(state, groupId, chunkId, ownerRunId)
+
+  if (lease.phase !== 'bootstrapping') {
+    throw new Error('Agora runner lease phase is invalid.')
+  }
+  if (group.threadId !== undefined && group.threadId !== threadId) {
+    throw new Error('Agora runner group already has another Codex thread.')
+  }
+
+  group.threadId = threadId
+  delete lease.child
+  lease.phase = 'leased'
 }
 
 export const renewLease = (state, groupId, chunkId, ownerRunId, expiresAt) => {
   const lease = requireOwnedLease(state, groupId, chunkId, ownerRunId)
 
-  if (!['handling', 'leased', 'planned'].includes(lease.phase)) {
+  if (!['bootstrapping', 'handling', 'leased', 'planned'].includes(lease.phase)) {
     throw new Error('Agora runner lease phase is invalid.')
   }
 
@@ -195,6 +248,7 @@ export const attachPlan = (state, groupId, chunkId, ownerRunId, plan) => {
 
 export const failLease = (state, groupId, chunkId, ownerRunId, {
   code,
+  terminal = false,
   maximumAttempts,
   retryAt
 }) => {
@@ -210,7 +264,7 @@ export const failLease = (state, groupId, chunkId, ownerRunId, {
   lease.failureCode = code
   group.lastFailureCode = code
 
-  if (lease.attempt >= maximumAttempts) {
+  if (terminal || lease.attempt >= maximumAttempts) {
     lease.phase = 'failed'
     delete lease.retryAt
   } else {
@@ -240,6 +294,14 @@ export const recoverLease = (state, groupId, {
   lease.expiresAt = leaseExpiry(now, leaseDurationMs)
 
   if (lease.phase === 'planned') {
+    return lease
+  }
+
+  if (lease.phase === 'bootstrapping' || lease.phase === 'handling') {
+    lease.failureCode = 'turn_indeterminate'
+    group.lastFailureCode = 'turn_indeterminate'
+    lease.phase = 'failed'
+    delete lease.retryAt
     return lease
   }
 

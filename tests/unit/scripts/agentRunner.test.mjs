@@ -124,11 +124,12 @@ class FakeAgora {
 }
 
 const configFor = (stateDirectory, overrides = {}) => ({
+  agentHome: stateDirectory,
   apiTimeoutMs: 1000,
   apiUrl: 'https://example.supabase.co/functions/v1/agora',
   chunkSize: 20,
   codexBin: 'codex',
-  complexModel: 'gpt-5.6-sol',
+  codexHome: join(stateDirectory, 'codex'),
   credentialDirectory: stateDirectory,
   handlerOutputSchemaPath: join(process.cwd(), 'ops/agent-runner/handler-output.schema.json'),
   handlerPromptPath: join(process.cwd(), 'ops/agent-runner/handler-prompt.md'),
@@ -139,9 +140,9 @@ const configFor = (stateDirectory, overrides = {}) => ({
   pollIntervalMs: 100,
   publishableKey: 'example-public-key',
   retryBaseMs: 1,
-  standardModel: 'gpt-5.6-luna',
   stateDirectory,
   supabaseUrl: 'https://example.supabase.co',
+  threadBootstrapPromptPath: join(process.cwd(), 'ops/agent-runner/thread-bootstrap-prompt.md'),
   workspace: process.cwd(),
   ...overrides
 })
@@ -176,10 +177,27 @@ const message = (sequence, text) => ({
   text
 })
 
-const successfulHandler = (calls, reply = 'Example reply') => async ({ onHeartbeat, onStarted }) => {
+const startHandlerTurn = async ({
+  onBootstrapStarted,
+  onBootstrapStarting,
+  onThreadReady,
+  onTurnStarted,
+  onTurnStarting,
+  threadId
+}) => {
+  if (!threadId) {
+    await onBootstrapStarting()
+    await onBootstrapStarted(processIdentity)
+    await onThreadReady(randomUUID())
+  }
+  await onTurnStarting()
+  await onTurnStarted(processIdentity)
+}
+
+const successfulHandler = (calls, reply = 'Example reply') => async (options) => {
   calls.count += 1
-  await onStarted(processIdentity)
-  await onHeartbeat()
+  await startHandlerTurn(options)
+  await options.onHeartbeat()
   return { messages: [{ text: reply }], version: 1 }
 }
 
@@ -248,6 +266,40 @@ describe('Agora agent runner orchestration', () => {
     expect(calls.count).toBe(1)
   })
 
+  it('resumes the same group thread after a runner restart', async () => {
+    const api = new FakeAgora([message(1, 'First durable turn')])
+    const expectedThreadId = randomUUID()
+    const observedThreadIds = []
+    const handler = async (options) => {
+      observedThreadIds.push(options.threadId)
+      if (!options.threadId) {
+        await options.onBootstrapStarting()
+        await options.onBootstrapStarted(processIdentity)
+        await options.onThreadReady(expectedThreadId)
+      }
+      await options.onTurnStarting()
+      await options.onTurnStarted(processIdentity)
+      return { messages: [], version: 1 }
+    }
+    const first = await createFixture({ api, handler })
+    await first.runner.runOnce(new AbortController().signal)
+    expect((await first.store.read()).groups[groupId].threadId).toBe(expectedThreadId)
+
+    api.appendHuman('Second durable turn')
+    const resumed = new AgoraRunner({
+      api,
+      config: configFor(first.root),
+      handler,
+      logger,
+      store: new DurableRunnerStore(first.root)
+    })
+    await resumed.initialize()
+    await resumed.runOnce(new AbortController().signal)
+
+    expect(observedThreadIds).toEqual([undefined, expectedThreadId])
+    expect((await resumed.store.read()).groups[groupId].threadId).toBe(expectedThreadId)
+  })
+
   it('keeps message text and raw identifiers out of structured runner logs', async () => {
     const input = 'Generated private input marker'
     const reply = 'Generated private reply marker'
@@ -276,8 +328,9 @@ describe('Agora agent runner orchestration', () => {
     const api = new FakeAgora([message(1, 'Generated capability injection fixture')])
     const { runner } = await createFixture({
       api,
-      handler: async ({ contextAccess, onStarted }) => {
-        await onStarted(processIdentity)
+      handler: async (options) => {
+        await startHandlerTurn(options)
+        const { contextAccess } = options
         return { messages: [{ text: contextAccess.capability }], version: 1 }
       }
     })
@@ -387,37 +440,73 @@ describe('Agora agent runner orchestration', () => {
     let calls = 0
     const { runner, store } = await createFixture({
       api,
-      handler: async ({ onStarted }) => {
+      handler: async (options) => {
         calls += 1
-        await onStarted(processIdentity)
+        await startHandlerTurn(options)
         throw new HandlerExecutionError('handler_failed')
       }
     })
 
     await expect(runner.runOnce(new AbortController().signal))
       .rejects.toMatchObject({ code: 'handler_failed' })
-    expect(calls).toBe(2)
+    expect(calls).toBe(1)
     expect(api.markCalls).toEqual([])
     expect((await store.read()).groups[groupId]).toMatchObject({
       cursor: '0',
-      lease: { attempt: 2, phase: 'failed' }
+      lease: { attempt: 1, failureCode: 'turn_indeterminate', phase: 'failed' }
     })
   })
 
-  it('settles cancellation without acknowledgement and leaves a retryable range', async () => {
+  it('does not replay a bootstrap that may have produced a tool effect', async () => {
+    const api = new FakeAgora([message(1, 'Bootstrap interruption fixture')])
+    let calls = 0
+    const first = await createFixture({
+      api,
+      handler: async (options) => {
+        calls += 1
+        await options.onBootstrapStarting()
+        await options.onBootstrapStarted(processIdentity)
+        throw new HandlerExecutionError('handler_failed')
+      }
+    })
+
+    await expect(first.runner.runOnce(new AbortController().signal))
+      .rejects.toMatchObject({ code: 'handler_failed' })
+    expect(calls).toBe(1)
+    expect(api.markCalls).toEqual([])
+    expect((await first.store.read()).groups[groupId]).toMatchObject({
+      cursor: '0',
+      lease: { failureCode: 'turn_indeterminate', phase: 'failed' }
+    })
+
+    const resumed = new AgoraRunner({
+      api,
+      config: configFor(first.root),
+      handler: async () => { calls += 1 },
+      logger,
+      store: new DurableRunnerStore(first.root)
+    })
+    await resumed.initialize()
+    await expect(resumed.runOnce(new AbortController().signal))
+      .rejects.toMatchObject({ code: 'handler_failed' })
+    expect(calls).toBe(1)
+    expect(api.markCalls).toEqual([])
+  })
+
+  it('settles cancellation without acknowledgement and requires effect reconciliation', async () => {
     const api = new FakeAgora([message(1, 'Wait for cancellation')])
     const controller = new AbortController()
     let entered
     const enteredPromise = new Promise((resolve) => { entered = resolve })
     const { runner, store } = await createFixture({
       api,
-      handler: async ({ onStarted, signal }) => {
-        await onStarted(processIdentity)
+      handler: async (options) => {
+        await startHandlerTurn(options)
         entered()
         return new Promise((resolve, reject) => {
           const onAbort = () => reject(new RunnerCanceledError())
-          signal.addEventListener('abort', onAbort, { once: true })
-          if (signal.aborted) onAbort()
+          options.signal.addEventListener('abort', onAbort, { once: true })
+          if (options.signal.aborted) onAbort()
         })
       }
     })
@@ -429,7 +518,7 @@ describe('Agora agent runner orchestration', () => {
     expect(api.markCalls).toEqual([])
     expect((await store.read()).groups[groupId]).toMatchObject({
       cursor: '0',
-      lease: { phase: 'retryable' }
+      lease: { failureCode: 'turn_indeterminate', phase: 'failed' }
     })
   })
 

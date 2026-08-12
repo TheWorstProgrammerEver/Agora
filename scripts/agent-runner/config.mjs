@@ -4,6 +4,10 @@ import { maximumChunkSize } from './constants.mjs'
 
 const moduleDirectory = fileURLToPath(new URL('.', import.meta.url))
 const defaultPromptPath = resolve(moduleDirectory, '../../ops/agent-runner/handler-prompt.md')
+const defaultThreadBootstrapPromptPath = resolve(
+  moduleDirectory,
+  '../../ops/agent-runner/thread-bootstrap-prompt.md'
+)
 const defaultOutputSchemaPath = resolve(
   moduleDirectory,
   '../../ops/agent-runner/handler-output.schema.json'
@@ -80,19 +84,28 @@ export const loadRunnerConfig = (environment = process.env) => {
   const api = loadApiConfig(environment)
   const supabaseUrlSource = environment.AGORA_RUNNER_SUPABASE_URL?.trim()
   const workspace = environment.AGORA_RUNNER_WORKSPACE?.trim()
+  const codexHome = environment.CODEX_HOME?.trim()
+  const agentHome = environment.HOME?.trim()
 
   if (!workspace) {
     throw new Error('Agora runner workspace is required.')
   }
+  if (!codexHome) {
+    throw new Error('Agora runner CODEX_HOME is required.')
+  }
+  if (!agentHome) {
+    throw new Error('Agora runner HOME is required.')
+  }
 
   return {
     ...api,
+    agentHome: requireAbsolutePath(agentHome, 'HOME'),
     chunkSize: parseInteger(environment, 'AGORA_RUNNER_CHUNK_SIZE', 20, {
       maximum: maximumChunkSize,
       minimum: 1
     }),
     codexBin: environment.AGORA_RUNNER_CODEX_BIN?.trim() || 'codex',
-    complexModel: environment.AGORA_RUNNER_COMPLEX_MODEL?.trim() || 'gpt-5.6-sol',
+    codexHome: requireAbsolutePath(codexHome, 'CODEX_HOME'),
     handlerOutputSchemaPath: requireAbsolutePath(
       environment.AGORA_RUNNER_HANDLER_SCHEMA?.trim() || defaultOutputSchemaPath,
       'AGORA_RUNNER_HANDLER_SCHEMA'
@@ -117,11 +130,15 @@ export const loadRunnerConfig = (environment = process.env) => {
       maximum: 60 * 60_000,
       minimum: 1000
     }),
-    standardModel: environment.AGORA_RUNNER_STANDARD_MODEL?.trim() || 'gpt-5.6-luna',
     stateDirectory: stateDirectoryFrom(environment),
     supabaseUrl: supabaseUrlSource
       ? parseUrl(supabaseUrlSource, 'AGORA_RUNNER_SUPABASE_URL', '/')
       : undefined,
+    threadBootstrapPromptPath: requireAbsolutePath(
+      environment.AGORA_RUNNER_THREAD_BOOTSTRAP_PROMPT?.trim()
+        || defaultThreadBootstrapPromptPath,
+      'AGORA_RUNNER_THREAD_BOOTSTRAP_PROMPT'
+    ),
     workspace: requireAbsolutePath(workspace, 'AGORA_RUNNER_WORKSPACE')
   }
 }

@@ -9,21 +9,24 @@ import {
   reconcileSnapshot,
   sendPlannedMessages
 } from './agora-operations.mjs'
-import { runCodexHandler, HandlerExecutionError } from './codex-handler.mjs'
+import { runCodexHandler } from './codex-handler.mjs'
+import { HandlerExecutionError } from './handler-error.mjs'
 import { startContextBroker } from './context-broker.mjs'
 import { readAgentCredential } from './credential.mjs'
 import { DurableRunnerStore } from './durable-store.mjs'
-import { selectHandlerProfile } from './handler-profile.mjs'
 import { settleRecoveredHandler } from './handler-process.mjs'
 import { buildHandlerPrompt } from './prompt.mjs'
 import { connectRealtime, earliestRefreshAt } from './realtime-transport.mjs'
 import { errorCodeFor, opaqueLabel } from './redacted-log.mjs'
 import {
   attachPlan,
+  attachLeaseChild,
   commitLease,
   commitSelfOnlyLease,
   createDurablePlan,
   failLease,
+  bindGroupThread,
+  markLeaseBootstrapping,
   markLeaseHandling,
   observeHighWatermark,
   prepareLease,
@@ -154,9 +157,12 @@ export class AgoraRunner {
         return current ? { phase: current.phase, retryAt: current.retryAt } : undefined
       }
       failLease(state, groupId, lease.chunkId, this.runId, {
-        code,
+        code: ['bootstrapping', 'handling'].includes(current.phase)
+          ? 'turn_indeterminate'
+          : code,
         maximumAttempts: this.config.maximumHandlerAttempts,
-        retryAt: retryAt(this.config, lease.attempt)
+        retryAt: retryAt(this.config, lease.attempt),
+        terminal: ['bootstrapping', 'handling'].includes(current.phase)
       })
       return {
         phase: state.groups[groupId].lease.phase,
@@ -260,14 +266,12 @@ export class AgoraRunner {
       messages,
       through: lease.through
     }
-    const profile = selectHandlerProfile(messages, this.config)
     const prompt = await buildHandlerPrompt({
       apiCli: {
         arguments: [apiCliPath, 'get-group-messages'],
         executable: process.execPath
       },
       context,
-      profile,
       promptPath: this.config.handlerPromptPath
     })
     const outputPath = this.store.handlerOutputPath(lease.chunkId)
@@ -275,6 +279,7 @@ export class AgoraRunner {
 
     try {
       contextAccess = await startContextBroker({ api: this.api, groupId, signal })
+      const groupState = (await this.store.read()).groups[groupId]
       const output = await this.handler({
         config: this.config,
         context,
@@ -286,18 +291,50 @@ export class AgoraRunner {
           this.runId,
           leaseExpiresAt(this.config)
         )),
-        onStarted: (identity) => this.store.update((state) => markLeaseHandling(
+        onBootstrapStarted: (identity) => this.store.update((state) => attachLeaseChild(
           state,
           groupId,
           lease.chunkId,
           this.runId,
+          'bootstrapping',
           identity,
           leaseExpiresAt(this.config)
         )),
+        onBootstrapStarting: () => this.store.update((state) => markLeaseBootstrapping(
+          state,
+          groupId,
+          lease.chunkId,
+          this.runId,
+          leaseExpiresAt(this.config)
+        )),
+        onThreadReady: (threadId) => this.store.update((state) => bindGroupThread(
+          state,
+          groupId,
+          lease.chunkId,
+          this.runId,
+          threadId
+        )),
+        onTurnStarted: (identity) => this.store.update((state) => attachLeaseChild(
+          state,
+          groupId,
+          lease.chunkId,
+          this.runId,
+          'handling',
+          identity,
+          leaseExpiresAt(this.config)
+        )),
+        onTurnStarting: () => this.store.update((state) => markLeaseHandling(
+          state,
+          groupId,
+          lease.chunkId,
+          this.runId,
+          leaseExpiresAt(this.config)
+        )),
         outputPath,
-        profile,
         prompt,
-        signal
+        signal,
+        threadId: groupState.threadId,
+        workspaceId: groupState.workspaceId
       })
       if (output.messages.some(({ text }) => text.includes(contextAccess.capability))) {
         throw new HandlerExecutionError('handler_output_invalid')

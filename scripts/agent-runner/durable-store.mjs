@@ -12,6 +12,7 @@ import {
 import { dirname, join } from 'node:path'
 import {
   createEmptyRunnerState,
+  migrateRunnerState,
   validateDurablePlan,
   validateRunnerState
 } from './state-schema.mjs'
@@ -145,7 +146,7 @@ export class DurableRunnerStore {
     }
 
     try {
-      return validateRunnerState(JSON.parse(source))
+      return validateRunnerState(migrateRunnerState(JSON.parse(source)))
     } catch {
       throw new Error('Agora runner state is invalid.')
     }

@@ -1,43 +1,25 @@
 import { spawn } from 'node:child_process'
 import { constants } from 'node:fs'
-import { open } from 'node:fs/promises'
+import { open, readFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { validateHandlerPlan } from './api-validation.mjs'
 import { RunnerCanceledError, throwIfAborted } from './abort.mjs'
 import { resolveCodexRuntime } from './codex-runtime.mjs'
+import { prepareGroupWorkspace } from './group-workspace.mjs'
+import { HandlerExecutionError } from './handler-error.mjs'
 import {
   durableProcessIdentity,
   terminateCurrentHandlerGroup
 } from './handler-process.mjs'
+import { isUuid } from './value-validation.mjs'
 import { readProcessIdentity } from '../process-identity.mjs'
 
 const apiCliPath = fileURLToPath(new URL('./context-cli.mjs', import.meta.url))
-const apiCliDirectory = fileURLToPath(new URL('.', import.meta.url))
-const allowedEnvironmentKeys = new Set([
-  'CODEX_HOME',
-  'HOME',
-  'HTTPS_PROXY',
-  'HTTP_PROXY',
-  'LANG',
-  'LC_ALL',
-  'LOGNAME',
-  'NO_PROXY',
-  'OPENAI_API_KEY',
-  'PATH',
-  'SHELL',
-  'SSL_CERT_DIR',
-  'SSL_CERT_FILE',
-  'TERM',
-  'USER',
-  'XDG_CONFIG_HOME'
-])
+const maximumEventBytes = 256 * 1024
+const transportEnvironmentPattern = /^(?:AGORA_RUNNER_|CREDENTIALS_DIRECTORY$)/
 
-export class HandlerExecutionError extends Error {
-  constructor(code) {
-    super(`Agora handler failed (${code}).`)
-    this.code = code
-  }
-}
+export { HandlerExecutionError } from './handler-error.mjs'
 
 const handlerRuntime = (codexBin) => {
   try {
@@ -47,64 +29,117 @@ const handlerRuntime = (codexBin) => {
   }
 }
 
-const filesystemPermissionConfig = (config) => {
-  const runtime = config.codexRuntime ?? handlerRuntime(config.codexBin)
+const protectedCodexPaths = (config, protectedPaths) => {
+  const codexHome = config.codexHome
+  const candidates = [
+    [config.workspace, 'read'],
+    [join(config.workspace, 'AGENTS.md'), 'deny'],
+    [join(config.workspace, 'AGENTS.override.md'), 'deny'],
+    [join(codexHome, 'config.toml'), 'read'],
+    [join(codexHome, 'plugins'), 'read'],
+    [join(codexHome, 'rules'), 'read'],
+    [join(codexHome, 'skills'), 'read'],
+    [join(codexHome, '.credentials.json'), 'deny'],
+    [join(codexHome, 'auth.json'), 'deny'],
+    [join(codexHome, 'history.jsonl'), 'deny'],
+    [join(codexHome, 'sessions'), 'deny'],
+    [join(codexHome, 'archived_sessions'), 'deny'],
+    [join(codexHome, 'shell_snapshots'), 'deny'],
+    [join(codexHome, 'thread-writer-locks'), 'deny'],
+    [join(codexHome, 'thread_history_1.sqlite'), 'deny'],
+    [config.credentialDirectory, 'deny'],
+    [config.stateDirectory, 'deny'],
+    ...protectedPaths.map((path) => [path, 'deny'])
+  ]
+  return new Map(candidates.filter(([path]) => typeof path === 'string'))
+}
+
+const filesystemPermissionConfig = (config, protectedPaths) => {
   const entries = new Map([
-    [':root', 'deny'],
-    [':minimal', 'read'],
-    [apiCliDirectory, 'read'],
-    ...runtime.readableDirectories.map((path) => [path, 'read']),
-    [config.credentialDirectory, 'deny']
+    [':root', 'read'],
+    ...protectedCodexPaths(config, protectedPaths)
   ])
   const fields = Array.from(entries, ([path, access]) => (
     `${JSON.stringify(path)} = ${JSON.stringify(access)}`
   ))
-  return `permissions.agora-handler.filesystem={ ${fields.join(', ')} }`
+  return `permissions.agora-inbox.filesystem={ ${fields.join(', ')} }`
 }
 
-export const handlerPermissionConfig = (config) => [
+export const handlerPermissionConfig = (config, { protectedPaths = [] } = {}) => [
   'approval_policy="never"',
-  'default_permissions="agora-handler"',
-  'permissions.agora-handler.description="Read-only Agora group context"',
-  filesystemPermissionConfig(config),
-  'permissions.agora-handler.network.enabled=true',
-  'permissions.agora-handler.network.allow_local_binding=false',
-  'permissions.agora-handler.network.domains={ "127.0.0.1" = "allow" }',
+  'default_permissions="agora-inbox"',
+  'permissions.agora-inbox.description="Host agent permissions with Agora isolation"',
+  'permissions.agora-inbox.extends=":workspace"',
+  filesystemPermissionConfig(config, protectedPaths),
+  'permissions.agora-inbox.network.enabled=true',
+  'permissions.agora-inbox.network.allow_local_binding=false',
+  'permissions.agora-inbox.network.domains={ "*" = "allow", "127.0.0.1" = "allow", "localhost" = "allow" }',
   'shell_environment_policy.inherit="all"',
-  'shell_environment_policy.ignore_default_excludes=false',
-  'tools.web_search=false',
-  'web_search="disabled"'
+  'shell_environment_policy.ignore_default_excludes=false'
 ]
 
-export const buildCodexArgs = ({ config, outputPath, profile }) => [
-  'exec',
-  '--ephemeral',
-  '--ignore-user-config',
-  '--ignore-rules',
+const assertPermissionProfileCompatibility = async (config) => {
+  let source
+  try {
+    source = await readFile(join(config.codexHome, 'config.toml'), 'utf8')
+  } catch (error) {
+    if (error?.code === 'ENOENT') return
+    throw new HandlerExecutionError('handler_failed')
+  }
+
+  const activeLines = source
+    .split('\n')
+    .map((line) => line.replace(/\s+#.*$/, '').trim())
+    .filter(Boolean)
+  if (activeLines.some((line) => (
+    /^sandbox_mode\s*=/.test(line) || /^\[sandbox_workspace_write(?:\.|\])/.test(line)
+  ))) {
+    throw new HandlerExecutionError('handler_failed')
+  }
+}
+
+const commonCodexArgs = (config, options) => [
   '--strict-config',
-  '--model', profile.model,
-  '-c', `model_reasoning_effort="${profile.reasoningEffort}"`,
-  ...handlerPermissionConfig(config).flatMap((value) => ['-c', value]),
-  '--skip-git-repo-check',
-  '--cd', config.workspace,
+  ...handlerPermissionConfig(config, options).flatMap((value) => ['-c', value]),
+  '--skip-git-repo-check'
+]
+
+export const buildBootstrapArgs = ({
+  config,
+  protectedPaths = [],
+  workspace = config.workspace
+}) => [
+  'exec',
+  '--json',
+  ...commonCodexArgs(config, { protectedPaths }),
+  '--cd', workspace,
+  '-'
+]
+
+export const buildCodexArgs = ({ config, outputPath, protectedPaths = [], threadId }) => [
+  'exec',
+  'resume',
+  '--json',
+  ...commonCodexArgs(config, { protectedPaths }),
   '--output-schema', config.handlerOutputSchemaPath,
   '--output-last-message', outputPath,
-  '--color', 'never',
+  threadId,
   '-'
 ]
 
 const buildHandlerEnvironment = (config, context, contextAccess) => ({
   ...Object.fromEntries(
     Object.entries(process.env).filter(([key, value]) => (
-      allowedEnvironmentKeys.has(key) && value !== undefined
+      !transportEnvironmentPattern.test(key) && value !== undefined
     ))
   ),
+  CODEX_HOME: config.codexHome,
+  HOME: config.agentHome ?? process.env.HOME,
   AGORA_RUNNER_API_CLI: apiCliPath,
-  AGORA_RUNNER_API_TIMEOUT_MS: String(config.apiTimeoutMs),
   AGORA_RUNNER_CONTEXT_CAPABILITY: contextAccess.capability,
   AGORA_RUNNER_CONTEXT_URL: contextAccess.url,
   AGORA_RUNNER_HANDLER_CHUNK_ID: context.chunkId,
-  AGORA_RUNNER_HANDLER_GROUP_ID: context.groupId,
+  AGORA_RUNNER_HANDLER_GROUP_ID: context.groupId
 })
 
 const waitForIdentity = async (pid) => {
@@ -140,46 +175,51 @@ const readHandlerOutput = async (outputPath) => {
   }
 }
 
-export const runCodexHandler = async ({
+const threadIdFromEvents = (source) => {
+  let threadId
+
+  for (const line of source.split('\n')) {
+    if (!line.trim()) continue
+    let event
+    try {
+      event = JSON.parse(line)
+    } catch {
+      throw new HandlerExecutionError('handler_failed')
+    }
+    if (event?.type !== 'thread.started') continue
+    if (!isUuid(event.thread_id) || (threadId && threadId !== event.thread_id)) {
+      throw new HandlerExecutionError('handler_failed')
+    }
+    threadId = event.thread_id
+  }
+
+  if (!threadId) throw new HandlerExecutionError('handler_failed')
+  return threadId
+}
+
+const runCodexProcess = async ({
+  args,
   config,
-  context,
-  contextAccess,
+  environment,
   onHeartbeat,
+  onStarting,
   onStarted,
-  outputPath,
-  profile,
   prompt,
   signal,
-  terminationOptions
+  terminationOptions,
+  workspace,
+  captureOutput = false
 }) => {
   throwIfAborted(signal)
-  if (!contextAccess
-    || !/^[A-Za-z0-9_-]{43}$/.test(contextAccess.capability ?? '')
-    || typeof contextAccess.url !== 'string') {
-    throw new HandlerExecutionError('handler_failed')
-  }
-  const outputHandle = await open(
-    outputPath,
-    constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY,
-    0o600
-  )
-  await outputHandle.close()
-  const codexRuntime = handlerRuntime(config.codexBin)
-  const resolvedConfig = {
-    ...config,
-    codexBin: codexRuntime.executable,
-    codexRuntime
-  }
-  const child = spawn(codexRuntime.executable, buildCodexArgs({
-    config: resolvedConfig,
-    outputPath,
-    profile
-  }), {
-    cwd: config.workspace,
+  await onStarting()
+  throwIfAborted(signal)
+  const child = spawn(config.codexBin, args, {
+    cwd: workspace,
     detached: true,
-    env: buildHandlerEnvironment(config, context, contextAccess),
-    stdio: ['pipe', 'ignore', 'ignore']
+    env: environment,
+    stdio: ['pipe', captureOutput ? 'pipe' : 'ignore', 'ignore']
   })
+  let captured = ''
   let terminalAccepted = false
   let cancellationCode
   let heartbeat
@@ -190,23 +230,27 @@ export const runCodexHandler = async ({
     resolveTerminal = resolve
     rejectTerminal = reject
   })
-  const acceptTerminal = (outcome) => {
+  const finish = (callback, outcome) => {
     if (terminalAccepted) return
     terminalAccepted = true
     signal?.removeEventListener('abort', onAbort)
     clearInterval(heartbeat)
     clearTimeout(timeout)
-    resolveTerminal(outcome)
+    callback(outcome)
   }
-  child.once('error', () => {
-    if (terminalAccepted) return
-    terminalAccepted = true
-    signal?.removeEventListener('abort', onAbort)
-    clearInterval(heartbeat)
-    clearTimeout(timeout)
-    rejectTerminal(new HandlerExecutionError('handler_failed'))
-  })
+  const acceptTerminal = (outcome) => finish(resolveTerminal, outcome)
+  child.once('error', () => finish(
+    rejectTerminal,
+    new HandlerExecutionError('handler_failed')
+  ))
   child.once('close', (code, childSignal) => acceptTerminal({ code, signal: childSignal }))
+  child.stdout?.on('data', (chunk) => {
+    if (captured.length > maximumEventBytes) return
+    captured += chunk.toString('utf8')
+    if (Buffer.byteLength(captured) > maximumEventBytes) {
+      void terminate('handler_failed')
+    }
+  })
 
   const terminate = async (code) => {
     if (terminalAccepted || cancellationCode) return
@@ -214,14 +258,10 @@ export const runCodexHandler = async ({
     if (child.pid) await terminateCurrentHandlerGroup(child.pid, terminationOptions)
   }
   const requestTermination = (code) => {
-    void terminate(code).catch(() => {
-      if (terminalAccepted) return
-      terminalAccepted = true
-      signal?.removeEventListener('abort', onAbort)
-      clearInterval(heartbeat)
-      clearTimeout(timeout)
-      rejectTerminal(new HandlerExecutionError('handler_failed'))
-    })
+    void terminate(code).catch(() => finish(
+      rejectTerminal,
+      new HandlerExecutionError('handler_failed')
+    ))
   }
   const onAbort = () => requestTermination('canceled')
   signal?.addEventListener('abort', onAbort, { once: true })
@@ -245,15 +285,13 @@ export const runCodexHandler = async ({
     child.stdin.end(prompt)
 
     const terminal = await terminalPromise
-
     await terminateCurrentHandlerGroup(child.pid, terminationOptions)
     if (cancellationCode === 'canceled') throw new RunnerCanceledError()
     if (cancellationCode) throw new HandlerExecutionError(cancellationCode)
     if (terminal.code !== 0 || terminal.signal !== null) {
       throw new HandlerExecutionError('handler_failed')
     }
-
-    return await readHandlerOutput(outputPath)
+    return captured
   } catch (error) {
     if (child.pid) {
       await terminateCurrentHandlerGroup(child.pid, terminationOptions).catch(() => undefined)
@@ -265,4 +303,87 @@ export const runCodexHandler = async ({
     clearInterval(heartbeat)
     clearTimeout(timeout)
   }
+}
+
+export const runCodexHandler = async ({
+  config,
+  context,
+  contextAccess,
+  onBootstrapStarted,
+  onBootstrapStarting,
+  onHeartbeat,
+  onThreadReady,
+  onTurnStarted,
+  onTurnStarting,
+  outputPath,
+  prompt,
+  signal,
+  terminationOptions,
+  threadId,
+  workspaceId
+}) => {
+  throwIfAborted(signal)
+  if (!contextAccess
+    || !/^[A-Za-z0-9_-]{43}$/.test(contextAccess.capability ?? '')
+    || typeof contextAccess.url !== 'string') {
+    throw new HandlerExecutionError('handler_failed')
+  }
+  await assertPermissionProfileCompatibility(config)
+  const codexRuntime = handlerRuntime(config.codexBin)
+  const resolvedConfig = {
+    ...config,
+    codexBin: codexRuntime.executable,
+    codexRuntime
+  }
+  const environment = buildHandlerEnvironment(config, context, contextAccess)
+  const groupWorkspace = await prepareGroupWorkspace(config, context, workspaceId)
+  let boundThreadId = threadId
+
+  if (!boundThreadId) {
+    const bootstrapPrompt = await readFile(config.threadBootstrapPromptPath, 'utf8')
+    const events = await runCodexProcess({
+      args: buildBootstrapArgs({
+        config: resolvedConfig,
+        protectedPaths: groupWorkspace.protectedPaths,
+        workspace: groupWorkspace.workspace
+      }),
+      captureOutput: true,
+      config: resolvedConfig,
+      environment,
+      onHeartbeat,
+      onStarting: onBootstrapStarting,
+      onStarted: onBootstrapStarted,
+      prompt: bootstrapPrompt,
+      signal,
+      terminationOptions,
+      workspace: groupWorkspace.workspace
+    })
+    boundThreadId = threadIdFromEvents(events)
+    await onThreadReady(boundThreadId)
+  }
+
+  const outputHandle = await open(
+    outputPath,
+    constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY,
+    0o600
+  )
+  await outputHandle.close()
+  await runCodexProcess({
+    args: buildCodexArgs({
+      config: resolvedConfig,
+      outputPath,
+      protectedPaths: groupWorkspace.protectedPaths,
+      threadId: boundThreadId
+    }),
+    config: resolvedConfig,
+    environment,
+    onHeartbeat,
+    onStarting: onTurnStarting,
+    onStarted: onTurnStarted,
+    prompt,
+    signal,
+    terminationOptions,
+    workspace: groupWorkspace.workspace
+  })
+  return await readHandlerOutput(outputPath)
 }
