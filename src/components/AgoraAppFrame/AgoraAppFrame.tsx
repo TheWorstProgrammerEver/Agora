@@ -32,7 +32,7 @@ export const AgoraAppFrame = () => {
       )}
       navigation={(
         <nav className={styles.nav} aria-label="App navigation">
-          <NavLink className={navLinkClass} to="/" end>Home</NavLink>
+          <NavLink className={navLinkClass} to="/" end>Groups</NavLink>
           <NavLink className={navLinkClass} to="/profile">Profile</NavLink>
         </nav>
       )}
