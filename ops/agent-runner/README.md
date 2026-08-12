@@ -90,6 +90,15 @@ environment file is not a credential transport and must never contain the raw
 key. Use the existing `agent-keys:host` no-echo workflow to install, rotate,
 validate, or revoke the encrypted binding.
 
+The service sets `CODEX_HOME` to
+`/var/lib/agora-agent-runner-<unix-user>/codex`, beneath its systemd-managed
+private state directory. Provision the selected user's Codex authentication in
+that exact directory through the approved host bootstrap before enabling the
+runner. The unit does not use the system-manager `%h` specifier: in a system
+unit it resolves to the manager account rather than the account named by
+`User=`. Its working directory is the empty private runtime directory described
+below, so the hardened unit needs no writable service-account home mount.
+
 The unit also creates an empty private handler working directory under `/run`.
 Do not replace it with the service account's home or a source checkout: Codex
 core may load project instructions before command sandboxing begins.
@@ -104,9 +113,34 @@ Codex process path is deliberately opt-in:
 npm run test:agent-runner:codex
 ```
 
+To exercise the documented global npm launcher shape rather than a standalone
+Codex binary, point the test at that final public launcher and require the npm
+packaging assertion:
+
+```sh
+AGORA_RUNNER_TEST_CODEX_BIN=/home/my-user/.local/bin/codex \
+AGORA_RUNNER_REQUIRE_NPM_CODEX=true \
+npm run test:agent-runner:codex
+```
+
+The same launcher/runtime and credential-denial boundary has a model-free
+final-path smoke that does not need Supabase or Codex authentication:
+
+```sh
+AGORA_RUNNER_TEST_CODEX_BIN=/home/my-user/.local/bin/codex \
+npm run test:agent-runner:global-codex
+```
+
+The permission profile resolves that launcher's exact platform package and
+allows its `vendor/<target>/bin` directory without exposing the surrounding
+global package tree.
+
 On a Linux systemd host, `npm run test:systemd-agent-runner` verifies the exact
-production unit in an isolated root, then creates a short-lived encrypted
-credential and temporary service. It proves install, start, stop, explicit
-restart, crash restart, state reuse, bounded status, and journal redaction, and
-removes its runtime unit and fixture afterward. This test never installs a
-production agent credential or enables the production service.
+production unit in an isolated root, then installs the unchanged template under
+a unique test name with a constrained drop-in for the fixture account,
+executable, environment file, and encrypted credential path. It starts that
+hardened unit through the real system manager and asserts its production
+namespace policy, managed paths, start, stop, explicit restart, crash restart,
+state reuse, bounded status, and journal redaction. The test removes its unit
+and fixture afterward; it never installs a production agent credential or
+enables the production service.

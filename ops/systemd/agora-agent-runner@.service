@@ -9,8 +9,9 @@ StartLimitBurst=10
 Type=simple
 User=%i
 Group=%i
-WorkingDirectory=%h
+WorkingDirectory=/run/agora-agent-runner-handler-%i
 EnvironmentFile=/etc/agora-agent-runner/%i.conf
+Environment=CODEX_HOME=/var/lib/agora-agent-runner-%i/codex
 Environment=AGORA_RUNNER_STATE_DIRECTORY=/var/lib/agora-agent-runner-%i
 Environment=AGORA_RUNNER_WORKSPACE=/run/agora-agent-runner-handler-%i
 LoadCredentialEncrypted=agora-agent-key:/etc/credstore.encrypted/agora-agent-key.cred
@@ -35,7 +36,6 @@ ProtectKernelLogs=true
 ProtectKernelModules=true
 ProtectKernelTunables=true
 ProtectSystem=strict
-ReadWritePaths=%h/.codex
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 RestrictRealtime=true
 RestrictSUIDSGID=true

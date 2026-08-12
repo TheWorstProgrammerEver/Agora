@@ -19,9 +19,9 @@ const validateProductionUnit = async () => {
       mkdir(`${root}/etc/agora-agent-runner`, { recursive: true }),
       mkdir(`${root}/etc/credstore.encrypted`, { recursive: true }),
       mkdir(`${root}/etc/systemd/system`, { recursive: true }),
-      mkdir(`${root}/root/.codex`, { recursive: true }),
+      mkdir(`${root}/run/agora-agent-runner-handler-root`, { recursive: true }),
       mkdir(`${root}/usr/local/bin`, { recursive: true }),
-      mkdir(`${root}/var/lib`, { recursive: true })
+      mkdir(`${root}/var/lib/agora-agent-runner-root/codex`, { recursive: true })
     ])
     await Promise.all([
       copyFile(productionUnitPath, `${root}/etc/systemd/system/agora-agent-runner@.service`),

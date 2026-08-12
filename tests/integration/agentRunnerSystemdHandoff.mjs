@@ -1,6 +1,6 @@
 import { createServer } from 'node:http'
 import { randomBytes, randomUUID } from 'node:crypto'
-import { chmod, chown, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { runCommand } from '../../scripts/agent-keys/command.mjs'
 
@@ -24,13 +24,21 @@ if (!Number.isSafeInteger(uid)
 }
 
 const testRoot = await mkdtemp('/run/agora-agent-runner-test-')
-const stateDirectory = join(testRoot, 'state')
-const handlerWorkspace = join(testRoot, 'handler-workspace')
 const credentialDirectory = join(testRoot, 'credstore.encrypted')
 const credentialPath = join(credentialDirectory, 'agora-agent-key.cred')
-const unitName = `agora-agent-runner-test-${randomUUID()}.service`
-const unitPath = join('/run/systemd/system', unitName)
+const fixtureId = randomUUID()
+const templateName = `agora-agent-runner-live-${fixtureId}@.service`
+const instanceName = `fixture-${fixtureId}`
+const unitName = templateName.replace('@.', `@${instanceName}.`)
+const unitPath = join('/run/systemd/system', templateName)
+const dropInDirectory = join('/run/systemd/system', `${unitName}.d`)
+const dropInPath = join(dropInDirectory, 'live-validation.conf')
+const environmentPath = join(testRoot, 'runner.env')
+const stateDirectory = `/var/lib/agora-agent-runner-${instanceName}`
+const handlerWorkspace = `/run/agora-agent-runner-handler-${instanceName}`
+const codexHome = join(stateDirectory, 'codex')
 const cliPath = join(repository, 'scripts/agent-runner/cli.mjs')
+const productionUnitPath = join(repository, 'ops/systemd/agora-agent-runner@.service')
 const credentialProbePath = join(repository, 'tests/fixtures/agentRunnerCredentialProbe.mjs')
 const key = `agora_agent_v1_${randomBytes(32).toString('base64url')}`
 let requestCount = 0
@@ -72,6 +80,34 @@ const assertAbsentFromArguments = async () => {
     } catch (error) {
       if (!['EACCES', 'ENOENT', 'EPERM'].includes(error.code)) throw error
     }
+  }
+}
+
+const assertProductionNamespace = async () => {
+  const expected = new Map([
+    ['FragmentPath', unitPath],
+    ['NoNewPrivileges', 'yes'],
+    ['PrivateDevices', 'yes'],
+    ['PrivateTmp', 'yes'],
+    ['ProtectHome', 'read-only'],
+    ['ProtectSystem', 'strict'],
+    ['RuntimeDirectory', `agora-agent-runner-handler-${instanceName}`],
+    ['StateDirectory', `agora-agent-runner-${instanceName}`],
+    ['WorkingDirectory', handlerWorkspace]
+  ])
+  for (const [property, value] of expected) {
+    if (await show(property) !== value) {
+      throw new Error('The live systemd runner did not retain its production namespace policy.')
+    }
+  }
+  if (!await show('DropInPaths').then((value) => value.includes(dropInPath))) {
+    throw new Error('The live systemd runner did not load its constrained fixture overrides.')
+  }
+  const environment = await show('Environment')
+  if (!environment.includes(`CODEX_HOME=${codexHome}`)
+    || !environment.includes(`AGORA_RUNNER_STATE_DIRECTORY=${stateDirectory}`)
+    || !environment.includes(`AGORA_RUNNER_WORKSPACE=${handlerWorkspace}`)) {
+    throw new Error('The live systemd runner did not resolve its production-managed paths.')
   }
 }
 
@@ -126,10 +162,6 @@ const closeServer = () => new Promise((resolveClose, reject) => {
 try {
   await chmod(testRoot, 0o755)
   await mkdir(credentialDirectory, { mode: 0o700 })
-  await mkdir(stateDirectory, { mode: 0o700 })
-  await mkdir(handlerWorkspace, { mode: 0o700 })
-  await chown(stateDirectory, uid, gid)
-  await chown(handlerWorkspace, uid, gid)
   await checked('/usr/bin/systemd-creds', [
     '--allow-null',
     '--with-key=null',
@@ -162,40 +194,43 @@ try {
   const port = await startServer()
   const apiUrl = `http://127.0.0.1:${port}/functions/v1/agora`
   const supabaseUrl = `http://127.0.0.1:${port}`
-  const unit = `[Unit]
-Description=Agora agent runner live validation
-After=network.target
-
-[Service]
-Type=simple
+  const environment = `AGORA_RUNNER_API_URL=${apiUrl}
+AGORA_RUNNER_CODEX_BIN=/bin/false
+AGORA_RUNNER_POLL_INTERVAL_MS=1000
+AGORA_RUNNER_REQUEST_ATTEMPTS=1
+AGORA_RUNNER_RETRY_BASE_MS=10
+AGORA_RUNNER_SUPABASE_PUBLISHABLE_KEY=public-validation-key
+AGORA_RUNNER_SUPABASE_URL=${supabaseUrl}
+`
+  const dropIn = `[Service]
 User=${uid}
 Group=${gid}
-WorkingDirectory=${repository}
-Environment=AGORA_RUNNER_API_URL=${apiUrl}
-Environment=AGORA_RUNNER_CODEX_BIN=/bin/false
-Environment=AGORA_RUNNER_POLL_INTERVAL_MS=1000
-Environment=AGORA_RUNNER_REQUEST_ATTEMPTS=1
-Environment=AGORA_RUNNER_RETRY_BASE_MS=10
-Environment=AGORA_RUNNER_STATE_DIRECTORY=${stateDirectory}
-Environment=AGORA_RUNNER_SUPABASE_PUBLISHABLE_KEY=public-validation-key
-Environment=AGORA_RUNNER_SUPABASE_URL=${supabaseUrl}
-Environment=AGORA_RUNNER_WORKSPACE=${handlerWorkspace}
+EnvironmentFile=
+EnvironmentFile=${environmentPath}
+LoadCredentialEncrypted=
 LoadCredentialEncrypted=agora-agent-key:${credentialPath}
+ExecStart=
 ExecStart=${nodePath} ${cliPath} run
-Restart=always
 RestartSec=100ms
 TimeoutStopSec=5s
-KillMode=control-group
-UMask=0077
 `
-  await writeFile(unitPath, unit, { flag: 'wx', mode: 0o644 })
+  const productionUnit = await readFile(productionUnitPath, 'utf8')
+  await mkdir(dropInDirectory, { recursive: true, mode: 0o755 })
+  await Promise.all([
+    writeFile(unitPath, productionUnit, { flag: 'wx', mode: 0o644 }),
+    writeFile(dropInPath, dropIn, { flag: 'wx', mode: 0o644 }),
+    writeFile(environmentPath, environment, { flag: 'wx', mode: 0o600 })
+  ])
   await chmod(unitPath, 0o644)
-  await chown(testRoot, 0, 0)
+  if (await readFile(unitPath, 'utf8') !== productionUnit) {
+    throw new Error('The live systemd runner template differs from production.')
+  }
   await systemctl('daemon-reload')
   await systemctl('start', unitName)
   await waitFor(async () => requestCount >= 1 && await show('ActiveState') === 'active', (
     'The live systemd runner did not become healthy.'
   ))
+  await assertProductionNamespace()
   await assertAbsentFromArguments()
 
   const firstPid = await show('MainPID')
@@ -244,14 +279,21 @@ UMask=0077
     '--unit',
     unitName
   ], { output: 'buffer' })
-  if (journal.includes(key) || unit.includes(key) || (await readFile(credentialPath)).includes(key)) {
+  if (journal.includes(key)
+    || productionUnit.includes(key)
+    || dropIn.includes(key)
+    || environment.includes(key)
+    || (await readFile(credentialPath)).includes(key)) {
     throw new Error('The live systemd runner leaked its raw credential.')
   }
 } finally {
   await systemctl('stop', unitName).catch(() => undefined)
   await rm(unitPath, { force: true })
+  await rm(dropInDirectory, { force: true, recursive: true })
   await systemctl('daemon-reload').catch(() => undefined)
   await systemctl('reset-failed', unitName).catch(() => undefined)
   await closeServer().catch(() => undefined)
+  await rm(stateDirectory, { force: true, recursive: true })
+  await rm(handlerWorkspace, { force: true, recursive: true })
   await rm(testRoot, { force: true, recursive: true })
 }
