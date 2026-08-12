@@ -18,6 +18,14 @@ export const throwGroupDatabaseError = (error: unknown): never => {
     throw new AgoraGroupRequestError('This group operation is not permitted.', 403)
   }
 
+  if (code === 'P0002') {
+    throw new AgoraGroupRequestError('Group membership state was not found or is unavailable.', 404)
+  }
+
+  if (code === '23505' || code === '55000') {
+    throw new AgoraGroupRequestError('Group membership state conflicts with this request.', 409)
+  }
+
   if (code === '22001'
     || code === '22007'
     || code === '22008'

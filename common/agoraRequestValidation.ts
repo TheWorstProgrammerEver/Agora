@@ -5,7 +5,9 @@ import {
 } from './agoraRequestIdentifiers.ts'
 import {
   maximumGroupListPageSize,
-  maximumGroupNameLength
+  maximumGroupNameLength,
+  maximumInvitationListPageSize,
+  maximumMemberListPageSize
 } from './agoraGroupLimits.ts'
 
 type ParamsValidator = (value: unknown) => boolean
@@ -38,11 +40,13 @@ const isUuid = (value: unknown): value is string => (
   && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
 )
 
-const isCursorPage = (value: unknown) => (
+const isCursorPage = (value: unknown, maximumPageSize: number) => (
   isObject(value)
   && hasExactKeys(value, [], ['cursor', 'limit'])
   && (value.cursor === undefined || isNonEmptyString(value.cursor))
-  && (value.limit === undefined || isPositiveInteger(value.limit))
+  && (value.limit === undefined || (
+    isPositiveInteger(value.limit) && value.limit <= maximumPageSize
+  ))
 )
 
 const isGroupListPage = (value: unknown) => (
@@ -126,10 +130,14 @@ const validators = {
     && hasExactKeys(value, ['groupId'], ['cursor', 'limit'])
     && isUuid(value.groupId)
     && (value.cursor === undefined || isNonEmptyString(value.cursor))
-    && (value.limit === undefined || isPositiveInteger(value.limit))
+    && (value.limit === undefined || (
+      isPositiveInteger(value.limit) && value.limit <= maximumMemberListPageSize
+    ))
   ),
   [agoraRequestIdentifiers.listGroups]: isGroupListPage,
-  [agoraRequestIdentifiers.listPendingInvitations]: isCursorPage,
+  [agoraRequestIdentifiers.listPendingInvitations]: (value) => (
+    isCursorPage(value, maximumInvitationListPageSize)
+  ),
   [agoraRequestIdentifiers.markGroupRead]: (value) => (
     isObject(value)
     && hasExactKeys(value, ['groupId', 'throughSequence'])

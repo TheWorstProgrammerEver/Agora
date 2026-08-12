@@ -87,6 +87,7 @@ describe.sequential('anonymous health endpoint', () => {
       { allowed: true, function_name: 'current_principal_id' },
       { allowed: true, function_name: 'current_principal_is_group_member' },
       { allowed: true, function_name: 'get_agora_group' },
+      { allowed: true, function_name: 'list_agora_group_members' },
       { allowed: true, function_name: 'list_agora_groups' }
     ])
     expect(healthGrants.rows).toEqual([{

@@ -56,6 +56,17 @@ export const createHumanFixture = async (label: string): Promise<HumanFixture> =
   }
 }
 
+export const signInHumanFixture = async (email: string) => {
+  const client = createAnonymousClient()
+  const { data, error } = await client.auth.signInWithPassword({ email, password })
+
+  if (error || !data.session) {
+    throw error ?? new Error('Human fixture sign-in did not return a session.')
+  }
+
+  return client
+}
+
 export const createHumanFixtures = async (labels: string[]) => {
   const fixtures: HumanFixture[] = []
 

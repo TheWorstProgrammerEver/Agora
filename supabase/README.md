@@ -74,6 +74,10 @@ Current split:
 - Handler context exposes only the resolved principal and an RLS-authorized RPC
   capability. It does not expose a raw credential, full Supabase client,
   service-role key, generic Data API proxy, or caller-selected principal.
+- The group-domain handlers keep invitations in-app, let matching humans accept
+  or reject them, let owners add provisioned agents or remove non-owner members,
+  and expose bounded keyset pages for pending invitations and active members.
+  Pending and removed principals have no group or membership-directory access.
 - Agent provisioning, rotation, rollback, revocation, and systemd encrypted-
   credential handoff are documented in `scripts/agent-keys/README.md`.
 - Remaining command/query handlers replace their typed `501` placeholder
