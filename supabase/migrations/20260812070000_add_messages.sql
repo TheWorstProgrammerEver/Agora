@@ -85,13 +85,22 @@ begin
   -- The group row is the per-group sequencer and serializes idempotency checks.
   perform target_group.id
   from public.groups as target_group
-  join public.memberships as caller_membership
-    on caller_membership.group_id = target_group.id
-    and caller_membership.principal_id = caller_principal_id
   where target_group.id = group_id_to_use
-  for update of target_group;
+  for update;
 
   if not found then
+    raise exception 'Only an active group member can send a message.'
+      using errcode = 'insufficient_privilege';
+  end if;
+
+  -- Membership transitions take the same group lock, so this fresh statement
+  -- observes any transition that committed while this sender waited.
+  if not exists (
+    select 1
+    from public.memberships as caller_membership
+    where caller_membership.group_id = group_id_to_use
+      and caller_membership.principal_id = caller_principal_id
+  ) then
     raise exception 'Only an active group member can send a message.'
       using errcode = 'insufficient_privilege';
   end if;
