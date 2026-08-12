@@ -88,20 +88,20 @@ const parseEnvironment = (content) => {
   return { serialized, values }
 }
 
-const protectTree = async (root, ownerUid) => {
+const protectTree = async (root, ownerUid, ownerGid) => {
   const metadata = await lstat(root)
   if (!metadata.isDirectory() || metadata.isSymbolicLink()) {
     throw new Error('Installed runner artifact root is invalid.')
   }
 
-  await chown(root, ownerUid, ownerUid)
+  await chown(root, ownerUid, ownerGid)
   await chmod(root, 0o755)
   for (const name of await readdir(root)) {
     const target = path.join(root, name)
     const child = await lstat(target)
-    if (child.isDirectory()) await protectTree(target, ownerUid)
+    if (child.isDirectory()) await protectTree(target, ownerUid, ownerGid)
     else {
-      await chown(target, ownerUid, ownerUid)
+      await chown(target, ownerUid, ownerGid)
       await chmod(target, child.mode & 0o111 ? 0o755 : 0o644)
     }
   }
@@ -130,6 +130,7 @@ export const installRunnerArtifact = async ({
   artifact,
   config,
   digest,
+  ownerGid = process.getgid?.() ?? 0,
   ownerUid = 0,
   roots = {
     config: '/etc/agora-agent-runner',
@@ -171,30 +172,30 @@ export const installRunnerArtifact = async ({
     await cp(sourceRoot, temporaryRelease, { recursive: true })
     const installedVerification = await verifyArtifact(temporaryRelease)
     if (installedVerification.digest !== digest) throw new Error('Installed runner artifact verification failed.')
-    await protectTree(temporaryRelease, ownerUid)
+    await protectTree(temporaryRelease, ownerUid, ownerGid)
     await rename(temporaryRelease, releaseRoot)
 
     await mkdir(path.dirname(roots.launcher), { mode: 0o755, recursive: true })
     await writeFile(roots.launcher, launcherContent(releaseRoot), { flag: 'wx', mode: 0o755 })
-    await chown(roots.launcher, ownerUid, ownerUid)
+    await chown(roots.launcher, ownerUid, ownerGid)
     await mkdir(path.dirname(roots.custodyLauncher), { mode: 0o755, recursive: true })
     await writeFile(roots.custodyLauncher, custodyLauncherContent(releaseRoot), {
       flag: 'wx',
       mode: 0o755
     })
-    await chown(roots.custodyLauncher, ownerUid, ownerUid)
+    await chown(roots.custodyLauncher, ownerUid, ownerGid)
 
     await mkdir(roots.systemd, { mode: 0o755, recursive: true })
     await cp(path.join(releaseRoot, 'ops/systemd/agora-agent-runner@.service'), installedUnit, {
       errorOnExist: true,
       force: false
     })
-    await chown(installedUnit, ownerUid, ownerUid)
+    await chown(installedUnit, ownerUid, ownerGid)
     await chmod(installedUnit, 0o644)
 
     await mkdir(roots.config, { mode: 0o700, recursive: true })
     await writeFile(installedConfig, publicConfig.serialized, { flag: 'wx', mode: 0o600 })
-    await chown(installedConfig, ownerUid, ownerUid)
+    await chown(installedConfig, ownerUid, ownerGid)
 
     return { codexPath: publicConfig.values.get('AGORA_RUNNER_CODEX_BIN'), releaseRoot, user }
   } catch (error) {
