@@ -1,5 +1,6 @@
 import { mkdtemp, mkdir, readFile, rm, symlink, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
+import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
@@ -19,6 +20,7 @@ import {
 import { runHostPreflight } from '../../../scripts/agent-provisioning/host-preflight.mjs'
 
 const fixtures = []
+const principalId = '11111111-1111-4111-8111-111111111111'
 const createFixture = async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'agora-provisioning-test-'))
   fixtures.push(root)
@@ -167,6 +169,7 @@ describe('runner artifact installation', () => {
       digest,
       operation: 'install',
       ownerUid: process.getuid(),
+      principal: principalId,
       roots,
       run: async () => Buffer.alloc(0),
       service: 'agora-agent-runner@test.service'
@@ -176,7 +179,7 @@ describe('runner artifact installation', () => {
     })
   })
 
-  it('proves host readiness below a canonical final entry with an aliased ancestor', async () => {
+  it.each(['install', 'recover'])('proves %s host readiness below a canonical final entry with an aliased ancestor', async (operation) => {
     const fixture = await createFixture()
     const artifact = path.join(fixture, 'artifact')
     const config = path.join(fixture, 'runner.conf')
@@ -226,14 +229,16 @@ describe('runner artifact installation', () => {
     await expect(runHostPreflight({
       digest,
       fetchImpl: async () => new Response(null, { status: statuses.shift() }),
-      operation: 'install',
+      operation,
       ownerUid: process.getuid(),
+      principal: principalId,
       roots,
       run,
       service: 'agora-agent-runner@test.service'
     })).resolves.toMatchObject({
       artifactDigest: digest,
-      operation: 'install',
+      agentPrincipalId: principalId,
+      operation,
       service: 'agora-agent-runner@test.service'
     })
     expect(statuses).toEqual([])
@@ -250,6 +255,7 @@ describe('host readiness receipt', () => {
   it('binds the operation, unit, artifact, and bounded timestamp', () => {
     const now = Date.parse('2026-08-12T10:00:00Z')
     const receipt = createReadinessReceipt({
+      agentPrincipalId: principalId,
       artifactDigest: 'a'.repeat(64),
       now,
       operation: 'install',
@@ -257,6 +263,7 @@ describe('host readiness receipt', () => {
     })
 
     expect(parseReadinessReceipt(receipt, now + 1_000)).toMatchObject({
+      agentPrincipalId: principalId,
       artifactDigest: 'a'.repeat(64),
       operation: 'install',
       service: 'agora-agent-runner@test.service'
@@ -266,10 +273,23 @@ describe('host readiness receipt', () => {
 
   it('rejects a modified receipt', () => {
     const receipt = createReadinessReceipt({
+      agentPrincipalId: principalId,
       artifactDigest: 'a'.repeat(64),
       operation: 'install',
       service: 'agora-agent-runner@test.service'
     })
     expect(() => parseReadinessReceipt(receipt.replace('a', 'b'))).toThrow('malformed')
+  })
+
+  it('binds readiness evidence to exactly one principal', () => {
+    const otherPrincipalId = randomUUID()
+    const receipt = createReadinessReceipt({
+      agentPrincipalId: principalId,
+      artifactDigest: 'a'.repeat(64),
+      operation: 'install',
+      service: 'agora-agent-runner@test.service'
+    })
+
+    expect(parseReadinessReceipt(receipt).agentPrincipalId).not.toBe(otherPrincipalId)
   })
 })

@@ -1,9 +1,14 @@
 const safeToken = /^[a-z0-9][a-z0-9_.:@/-]{0,255}$/i
 
 export class ProvisioningFailure extends Error {
-  constructor({ code, recovery, stage }) {
+  constructor({ causeCode, causeStage, code, reconciliationCode, recovery, stage }) {
     super(code)
+    this.causeCode = causeCode ? requireSafe(causeCode, 'cause code') : undefined
+    this.causeStage = causeStage ? requireSafe(causeStage, 'cause stage') : undefined
     this.code = requireSafe(code, 'failure code')
+    this.reconciliationCode = reconciliationCode
+      ? requireSafe(reconciliationCode, 'reconciliation code')
+      : undefined
     this.recovery = requireRecovery(recovery)
     this.stage = requireSafe(stage, 'failure stage')
   }
@@ -31,8 +36,11 @@ export const asProvisioningFailure = (error, fallback) => (
 export const writeProvisioningFailure = (error, fallback, write = process.stderr.write.bind(process.stderr)) => {
   const failure = asProvisioningFailure(error, fallback)
   write(`${JSON.stringify({
+    ...(failure.causeCode ? { causeCode: failure.causeCode } : {}),
+    ...(failure.causeStage ? { causeStage: failure.causeStage } : {}),
     code: failure.code,
     event: 'provisioning_failed',
+    ...(failure.reconciliationCode ? { reconciliationCode: failure.reconciliationCode } : {}),
     recovery: failure.recovery,
     stage: failure.stage
   })}\n`)

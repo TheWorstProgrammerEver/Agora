@@ -8,8 +8,8 @@ import { parseReadinessReceipt } from '../agent-provisioning/readiness-receipt.m
 const usage = `Usage:
   operator-cli.mjs prepare DISPLAY_NAME
   operator-cli.mjs preflight AGENT_PRINCIPAL_ID --host-readiness RECEIPT
-  operator-cli.mjs issue AGENT_PRINCIPAL_ID --host-readiness RECEIPT
-  operator-cli.mjs rotate-begin AGENT_PRINCIPAL_ID
+  operator-cli.mjs issue AGENT_PRINCIPAL_ID --readiness-capability CAPABILITY_ID
+  operator-cli.mjs rotate-begin AGENT_PRINCIPAL_ID --readiness-capability CAPABILITY_ID
   operator-cli.mjs rotate-complete APPLICATION_KEY_ID FINGERPRINT
   operator-cli.mjs rotate-rollback APPLICATION_KEY_ID
   operator-cli.mjs revoke APPLICATION_KEY_ID REASON
@@ -53,27 +53,32 @@ const requireSingleRow = (rows, operation) => {
 
 const parseHostReadiness = (args) => {
   if (args.length !== 2 || args[0] !== '--host-readiness') throw new Error(usage)
-  return { payload: parseReadinessReceipt(args[1]), receipt: args[1] }
+  return parseReadinessReceipt(args[1])
 }
 
-const requireReadinessRow = (rows, principalId, receipt) => {
+const parseReadinessCapability = (args) => {
+  if (args.length !== 2 || args[0] !== '--readiness-capability') throw new Error(usage)
+  return validateUuid(args[1])
+}
+
+const requireReadinessRow = (rows, principalId) => {
   if (!Array.isArray(rows) || rows.length !== 1) {
     fail(
       'server_readiness',
       'principal_unavailable',
-      `npm run agent-keys:operator -- preflight ${principalId} --host-readiness ${receipt}`
+      `npm run agent-keys:operator -- preflight ${principalId} --host-readiness HOST_READINESS_RECEIPT`
     )
   }
 
   return rows[0]
 }
 
-const requireServerReadiness = (row, principalId, receipt) => {
+const requireServerReadiness = (row, principalId, operation) => {
   if (row.agent_principal_id !== principalId) {
     fail(
       'server_readiness',
       'principal_unavailable',
-      `npm run agent-keys:operator -- preflight ${principalId} --host-readiness ${receipt}`
+      `npm run agent-keys:operator -- preflight ${principalId} --host-readiness HOST_READINESS_RECEIPT`
     )
   }
 
@@ -85,15 +90,21 @@ const requireServerReadiness = (row, principalId, receipt) => {
     fail(
       'server_readiness',
       'authorized_group_required',
-      `npm run agent-keys:operator -- preflight ${principalId} --host-readiness ${receipt}`
+      `npm run agent-keys:operator -- preflight ${principalId} --host-readiness HOST_READINESS_RECEIPT`
     )
   }
 
-  if (Number(row.live_key_count) !== 0 || !row.ready_for_initial_key) {
+  const ready = operation === 'install'
+    ? Number(row.live_key_count) === 0 && row.ready_for_initial_key
+    : Number(row.active_key_count) === 1
+      && Number(row.pending_rotation_count) === 0
+      && row.ready_for_rotation
+
+  if (!ready) {
     fail(
       'server_readiness',
-      'initial_key_state_conflict',
-      `npm run agent-keys:operator -- rotate-begin ${principalId}`
+      operation === 'install' ? 'initial_key_state_conflict' : 'rotation_state_conflict',
+      `npm run agent-keys:operator -- preflight ${principalId} --host-readiness HOST_READINESS_RECEIPT`
     )
   }
 
@@ -125,37 +136,83 @@ export const runOperatorCommand = async (args, {
     return
   }
 
-  if (['preflight', 'issue'].includes(command) && first) {
-    const { payload, receipt } = parseHostReadiness(rest)
+  if (command === 'preflight' && first) {
+    const payload = parseHostReadiness(rest)
     const principalId = validateUuid(first)
+    if (payload.agentPrincipalId !== principalId) {
+      fail(
+        'host_readiness',
+        'readiness_principal_mismatch',
+        `npm run agent-provision:host -- preflight --principal ${principalId} --digest ${payload.artifactDigest} --operation ${payload.operation} --service ${payload.service}`
+      )
+    }
     const readiness = requireServerReadiness(
       requireReadinessRow(
         await operatorClient().getProvisioningReadiness(principalId),
-        principalId,
-        receipt
+        principalId
       ),
       principalId,
-      receipt
+      payload.operation
     )
-
-    if (command === 'preflight') {
-      terminal.write(`${JSON.stringify({
-        agentPrincipalId: principalId,
-        artifactDigest: payload.artifactDigest,
-        authorizedGroupCount: Number(readiness.authorized_group_count),
-        stage: 'ready_for_key_issuance'
-      })}\n`)
-      return
+    let capability
+    try {
+      capability = requireSingleRow(
+        await operatorClient().recordProvisioningReadiness({
+          agentPrincipalId: principalId,
+          artifactDigest: payload.artifactDigest,
+          checkedAt: new Date(payload.checkedAt).toISOString(),
+          operation: payload.operation,
+          service: payload.service
+        }),
+        'Agent host readiness registration'
+      )
+    } catch {
+      fail(
+        'server_readiness',
+        'readiness_registration_failed',
+        `npm run agent-keys:operator -- preflight ${principalId} --host-readiness HOST_READINESS_RECEIPT`
+      )
     }
-
-    requireIssuanceTerminal(terminal)
-    writeIssuance(terminal, await operatorClient().issueInitialKey(principalId))
+    terminal.write(`${JSON.stringify({
+      agentPrincipalId: principalId,
+      artifactDigest: payload.artifactDigest,
+      authorizedGroupCount: Number(readiness.authorized_group_count),
+      readinessCapabilityId: capability.readiness_capability_id,
+      readinessExpiresAt: capability.expires_at,
+      stage: 'ready_for_key_issuance'
+    })}\n`)
     return
   }
 
-  if (command === 'rotate-begin' && first && rest.length === 0) {
+  if (command === 'issue' && first) {
+    const principalId = validateUuid(first)
+    const capabilityId = parseReadinessCapability(rest)
     requireIssuanceTerminal(terminal)
-    writeIssuance(terminal, await operatorClient().beginRotation(validateUuid(first)))
+    try {
+      writeIssuance(terminal, await operatorClient().issueInitialKey(principalId, capabilityId))
+    } catch {
+      fail(
+        'key_issuance',
+        'readiness_capability_rejected',
+        `npm run agent-keys:operator -- preflight ${principalId} --host-readiness HOST_READINESS_RECEIPT`
+      )
+    }
+    return
+  }
+
+  if (command === 'rotate-begin' && first) {
+    const principalId = validateUuid(first)
+    const capabilityId = parseReadinessCapability(rest)
+    requireIssuanceTerminal(terminal)
+    try {
+      writeIssuance(terminal, await operatorClient().beginRotation(principalId, capabilityId))
+    } catch {
+      fail(
+        'key_issuance',
+        'readiness_capability_rejected',
+        `npm run agent-keys:operator -- preflight ${principalId} --host-readiness HOST_READINESS_RECEIPT`
+      )
+    }
     return
   }
 

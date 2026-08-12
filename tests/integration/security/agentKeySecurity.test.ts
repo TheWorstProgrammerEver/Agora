@@ -97,6 +97,19 @@ afterAll(async () => {
 })
 
 describe('agent principal issuance', () => {
+  const recordReadiness = async (principalId: string, operation: 'install' | 'rotate') => {
+    const result = await admin.rpc('record_agent_host_readiness', {
+      agent_principal_id_to_check: principalId,
+      artifact_digest_to_check: 'a'.repeat(64),
+      host_checked_at: new Date().toISOString(),
+      operation_to_check: operation,
+      service_name_to_check: 'agora-agent-runner@test.service'
+    })
+    expect(result.error).toBeNull()
+    expect(result.data).toHaveLength(1)
+    return result.data?.[0]?.readiness_capability_id as string
+  }
+
   it('requires active group membership before initial key issuance', async () => {
     const source = requireGroupFixture()
     const prepared = await admin.rpc('prepare_agent_principal', {
@@ -109,7 +122,8 @@ describe('agent principal issuance', () => {
 
     try {
       const denied = await admin.rpc('issue_initial_agent_application_key', {
-        agent_principal_id_to_issue: principalId
+        agent_principal_id_to_issue: principalId,
+        host_readiness_capability_id: randomUUID()
       })
       expect(denied.error?.code).toBe('55000')
 
@@ -121,6 +135,15 @@ describe('agent principal issuance', () => {
         live_key_count: 0,
         ready_for_initial_key: false
       }])
+
+      const deniedReadiness = await admin.rpc('record_agent_host_readiness', {
+        agent_principal_id_to_check: principalId,
+        artifact_digest_to_check: 'a'.repeat(64),
+        host_checked_at: new Date().toISOString(),
+        operation_to_check: 'install',
+        service_name_to_check: 'agora-agent-runner@test.service'
+      })
+      expect(deniedReadiness.error?.code).toBe('55000')
 
       const membership = await admin.from('memberships').insert({
         group_id: source.groups.visible,
@@ -138,12 +161,108 @@ describe('agent principal issuance', () => {
         ready_for_initial_key: true
       }])
 
+      const capabilityId = await recordReadiness(principalId, 'install')
       const issuance = await admin.rpc('issue_initial_agent_application_key', {
-        agent_principal_id_to_issue: principalId
+        agent_principal_id_to_issue: principalId,
+        host_readiness_capability_id: capabilityId
       })
       expect(issuance.error).toBeNull()
       expect(issuance.data).toHaveLength(1)
       expect(issuance.data?.[0]?.application_key).toMatch(/^agora_agent_v1_[A-Za-z0-9_-]{43}$/)
+
+      const reused = await admin.rpc('issue_initial_agent_application_key', {
+        agent_principal_id_to_issue: principalId,
+        host_readiness_capability_id: capabilityId
+      })
+      expect(reused.error?.code).toBe('55000')
+    } finally {
+      await deleteAgentFixtures([{ principalId } as AgentFixture])
+    }
+  })
+
+  it('rejects direct issuance and cross-principal readiness capabilities', async () => {
+    const source = requireGroupFixture()
+    const principalIds: string[] = []
+
+    try {
+      for (const suffix of ['first', 'second']) {
+        const prepared = await admin.rpc('prepare_agent_principal', {
+          display_name_to_use: `Capability ${suffix} ${randomUUID()}`
+        })
+        const principalId = prepared.data?.[0]?.agent_principal_id as string
+        principalIds.push(principalId)
+        expect((await admin.from('memberships').insert({
+          group_id: source.groups.visible,
+          principal_id: principalId,
+          role: 'member'
+        })).error).toBeNull()
+      }
+
+      const bypass = await admin.rpc('issue_initial_agent_application_key', {
+        agent_principal_id_to_issue: principalIds[0],
+        host_readiness_capability_id: randomUUID()
+      })
+      expect(bypass.error?.code).toBe('55000')
+
+      const firstCapability = await recordReadiness(principalIds[0], 'install')
+      const crossed = await admin.rpc('issue_initial_agent_application_key', {
+        agent_principal_id_to_issue: principalIds[1],
+        host_readiness_capability_id: firstCapability
+      })
+      expect(crossed.error?.code).toBe('55000')
+    } finally {
+      await deleteAgentFixtures(principalIds.map((principalId) => ({ principalId } as AgentFixture)))
+    }
+  })
+
+  it('supports bounded lost-key recovery after initial issuance', async () => {
+    const source = requireGroupFixture()
+    const prepared = await admin.rpc('prepare_agent_principal', {
+      display_name_to_use: `Lost key recovery ${randomUUID()}`
+    })
+    const principalId = prepared.data?.[0]?.agent_principal_id as string
+
+    try {
+      expect((await admin.from('memberships').insert({
+        group_id: source.groups.visible,
+        principal_id: principalId,
+        role: 'member'
+      })).error).toBeNull()
+      const installCapability = await recordReadiness(principalId, 'install')
+      const initial = await admin.rpc('issue_initial_agent_application_key', {
+        agent_principal_id_to_issue: principalId,
+        host_readiness_capability_id: installCapability
+      })
+      expect(initial.error).toBeNull()
+
+      const recoveryReadiness = await admin.rpc('record_agent_host_readiness', {
+        agent_principal_id_to_check: principalId,
+        artifact_digest_to_check: 'a'.repeat(64),
+        host_checked_at: new Date().toISOString(),
+        operation_to_check: 'recover',
+        service_name_to_check: 'agora-agent-runner@test.service'
+      })
+      expect(recoveryReadiness.error).toBeNull()
+      const replacement = await admin.rpc('begin_agent_application_key_rotation', {
+        agent_principal_id_to_rotate: principalId,
+        host_readiness_capability_id: recoveryReadiness.data?.[0]?.readiness_capability_id
+      })
+      expect(replacement.error).toBeNull()
+
+      const completed = await admin.rpc('complete_agent_application_key_rotation', {
+        replacement_key_id: replacement.data?.[0]?.application_key_id,
+        validated_fingerprint: replacement.data?.[0]?.key_fingerprint
+      })
+      expect(completed.error).toBeNull()
+
+      const audit = await admin
+        .from('agent_application_key_audit')
+        .select('application_key_id,state')
+        .eq('agent_principal_id', principalId)
+      expect(audit.data).toEqual(expect.arrayContaining([
+        { application_key_id: initial.data?.[0]?.application_key_id, state: 'revoked' },
+        { application_key_id: replacement.data?.[0]?.application_key_id, state: 'active' }
+      ]))
     } finally {
       await deleteAgentFixtures([{ principalId } as AgentFixture])
     }
@@ -213,7 +332,8 @@ describe('agent principal issuance', () => {
           display_name_to_use: 'Unauthorized agent'
         })
         const rotation = await caller.rpc('begin_agent_application_key_rotation', {
-          agent_principal_id_to_rotate: agent.principalId
+          agent_principal_id_to_rotate: agent.principalId,
+          host_readiness_capability_id: randomUUID()
         })
         const revocation = await caller.rpc('revoke_agent_application_key', {
           application_key_id_to_revoke: agent.keyId,
@@ -358,15 +478,26 @@ describe('agent key resolver', () => {
 })
 
 describe('agent key rotation', () => {
+  const authorizeAgent = async (principalId: string) => {
+    const membership = await admin.from('memberships').insert({
+      group_id: requireGroupFixture().groups.visible,
+      principal_id: principalId,
+      role: 'member'
+    })
+    expect(membership.error).toBeNull()
+  }
+
   it('keeps the old key valid until a validated replacement is activated', async () => {
     await withAgent(async (agent) => {
+      await authorizeAgent(agent.principalId)
       const replacement = await beginAgentRotation(agent.principalId)
 
       await expect(resolvePrincipalId(agent)).resolves.toBe(agent.principalId)
       await expect(resolvePrincipalId(replacement)).resolves.toBe(agent.principalId)
 
       const duplicateRotation = await admin.rpc('begin_agent_application_key_rotation', {
-        agent_principal_id_to_rotate: agent.principalId
+        agent_principal_id_to_rotate: agent.principalId,
+        host_readiness_capability_id: randomUUID()
       })
       const wrongFingerprint = await admin.rpc('complete_agent_application_key_rotation', {
         replacement_key_id: replacement.keyId,
@@ -411,6 +542,7 @@ describe('agent key rotation', () => {
 
   it('rolls back a pending replacement without revoking the old key', async () => {
     await withAgent(async (agent) => {
+      await authorizeAgent(agent.principalId)
       const replacement = await beginAgentRotation(agent.principalId)
       const rollback = await admin.rpc('rollback_agent_application_key_rotation', {
         replacement_key_id: replacement.keyId
@@ -424,6 +556,7 @@ describe('agent key rotation', () => {
 
   it('deactivates an agent and all overlapping rotation keys atomically', async () => {
     await withAgent(async (agent) => {
+      await authorizeAgent(agent.principalId)
       const replacement = await beginAgentRotation(agent.principalId)
       const deactivation = await admin.rpc('deactivate_agent_principal', {
         agent_principal_id_to_deactivate: agent.principalId,

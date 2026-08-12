@@ -75,13 +75,16 @@ The host preflight proves all of the following without an Agora key:
 
 ```sh
 npm run agent-provision:host -- preflight \
+  --principal AGENT_PRINCIPAL_ID \
   --digest ARTIFACT_DIGEST \
   --operation install \
   --service agora-agent-runner@my-user.service
 ```
 
-It prints a bounded, non-secret readiness receipt. Transfer that receipt to the
-restricted operator session. First confirm server readiness; this proves the
+It prints a bounded, non-secret, principal-bound readiness envelope. Transfer
+that envelope to the restricted operator session. It is only transport evidence,
+not issuance authority. The operator command revalidates principal and key state
+and records a short-lived, single-use server capability; this proves the
 principal is present, active, has at least one authorized group, and has no live
 key history:
 
@@ -90,7 +93,9 @@ npm run agent-keys:operator -- preflight AGENT_PRINCIPAL_ID \
   --host-readiness HOST_READINESS_RECEIPT
 ```
 
-Receipts expire after 15 minutes. Repeat both preflight commands if one expires.
+The result includes a non-secret readiness capability ID. Host evidence and the
+server capability expire after 15 minutes, and issuance consumes the capability
+atomically. Repeat both preflight commands if either expires.
 
 ## 4. Issue once and hydrate encrypted custody
 
@@ -98,7 +103,7 @@ Issue only after both preflights pass:
 
 ```sh
 npm run agent-keys:operator -- issue AGENT_PRINCIPAL_ID \
-  --host-readiness HOST_READINESS_RECEIPT
+  --readiness-capability READINESS_CAPABILITY_ID
 ```
 
 The application key appears exactly once on the operator TTY. Transfer it
@@ -136,17 +141,32 @@ codes, opaque labels, sequences, and phases.
 ## Recovery, rotation, and cleanup
 
 If the one-time key is lost before host custody, do not attempt to recover it.
-Begin a bounded rotation, install the pending replacement, validate it, complete
-the server rotation, then commit host custody:
+Run an explicit recovery preflight while the installed unit remains disabled,
+register the resulting capability, begin a bounded replacement, install and
+validate it, then complete the server rotation. Because no earlier credential
+entered host custody, this path uses `install` and has no host rollback artifact
+to commit:
 
 ```sh
-npm run agent-keys:operator -- rotate-begin AGENT_PRINCIPAL_ID
-/usr/local/sbin/agora-agent-custody rotate \
+npm run agent-provision:host -- preflight \
+  --principal AGENT_PRINCIPAL_ID \
+  --digest ARTIFACT_DIGEST \
+  --operation recover \
+  --service agora-agent-runner@my-user.service
+npm run agent-keys:operator -- preflight AGENT_PRINCIPAL_ID \
+  --host-readiness HOST_READINESS_RECEIPT
+npm run agent-keys:operator -- rotate-begin AGENT_PRINCIPAL_ID \
+  --readiness-capability READINESS_CAPABILITY_ID
+/usr/local/sbin/agora-agent-custody install \
   --service agora-agent-runner@my-user.service \
   --fingerprint REPLACEMENT_FINGERPRINT
 npm run agent-keys:operator -- rotate-complete REPLACEMENT_KEY_ID REPLACEMENT_FINGERPRINT
-/usr/local/sbin/agora-agent-custody commit
 ```
+
+For an ordinary rotation of a healthy runner, run host preflight with
+`--operation rotate`, register its server capability, then begin rotation with
+that capability before using `agora-agent-custody rotate`. Complete server
+rotation and commit host custody only after the replacement is validated.
 
 Before server completion, a failed rotation restores and validates the original
 credential, stops any restart loop, and keeps the replacement pending until the
@@ -194,5 +214,9 @@ production credential or runner custody.
 Operator, host, and custody entrypoints emit one bounded JSON failure containing
 `event`, `stage`, `code`, and one copy-safe `recovery` command. Native stderr,
 response bodies, keys, prompts, local paths, and arbitrary exception messages are
-not included. Run the recovery command, correct the named stage, then retry from
-that stage; do not skip ahead to issuance or activation.
+not included. A failed activation whose cleanup succeeds also reports
+`reconciliationCode: cleanup_verified`. If cleanup itself fails, the primary
+`stage` is `activation_reconciliation` and bounded `causeStage`/`causeCode`
+retain the original activation failure. Run the recovery command, correct the
+named stage, then retry from that stage; do not skip ahead to issuance or
+activation.

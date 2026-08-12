@@ -54,9 +54,23 @@ export const provisionAgentFixture = async (displayName: string): Promise<AgentF
 }
 
 export const beginAgentRotation = async (principalId: string) => {
-  const { data, error } = await createAdminClient().rpc(
+  const admin = createAdminClient()
+  const readiness = await admin.rpc('record_agent_host_readiness', {
+    agent_principal_id_to_check: principalId,
+    artifact_digest_to_check: 'a'.repeat(64),
+    host_checked_at: new Date().toISOString(),
+    operation_to_check: 'rotate',
+    service_name_to_check: 'agora-agent-runner@test.service'
+  })
+  if (readiness.error || readiness.data?.length !== 1) {
+    throw readiness.error ?? new Error('Rotation readiness did not return one capability.')
+  }
+  const { data, error } = await admin.rpc(
     'begin_agent_application_key_rotation',
-    { agent_principal_id_to_rotate: principalId }
+    {
+      agent_principal_id_to_rotate: principalId,
+      host_readiness_capability_id: readiness.data[0].readiness_capability_id
+    }
   )
   const issuance = requireSingleIssuance(
     data as AgentIssuance[] | null,

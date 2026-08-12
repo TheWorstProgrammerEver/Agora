@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { pathToFileURL } from 'node:url'
 import { SystemdCredentialStore } from './systemd-credential-store.mjs'
-import { createSystemdServiceControl } from './systemd-service.mjs'
+import { createSystemdServiceControl, isRunnerServiceName } from './systemd-service.mjs'
 import { readSecretFromTty } from './tty-secret.mjs'
 import { validateFingerprint } from './key-format.mjs'
 import { writeProvisioningFailure } from '../agent-provisioning/failure.mjs'
@@ -49,12 +49,12 @@ const projectedRecovery = (args, command) => {
 
   if (
     ['install', 'rotate'].includes(command)
-    && servicePattern.test(service ?? '')
+    && isRunnerServiceName(service ?? '')
     && /^sha256:[a-f0-9]{16}$/.test(fingerprint ?? '')
   ) {
     return `/usr/local/sbin/agora-agent-custody ${command} --service ${service} --fingerprint ${fingerprint}`
   }
-  if (servicePattern.test(service ?? '')) {
+  if (isRunnerServiceName(service ?? '')) {
     if (command === 'revoke') return `sudo systemctl disable --now ${service}`
     if (command === 'rollback') return `/usr/local/sbin/agora-agent-custody rollback --service ${service}`
     return `sudo systemctl reset-failed ${service}`
@@ -62,8 +62,6 @@ const projectedRecovery = (args, command) => {
   if (command === 'commit') return '/usr/local/sbin/agora-agent-custody commit'
   return '/usr/local/sbin/agora-agent-custody --help'
 }
-
-const servicePattern = /^[A-Za-z0-9@_.:-]+\.service$/
 
 export const runCredentialCommand = async (args, {
   createServiceControl = createSystemdServiceControl,

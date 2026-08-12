@@ -233,6 +233,16 @@ describe('systemd encrypted credential custody', () => {
     })
   })
 
+  it('removes the encrypted credential after failed initial activation', async () => {
+    const fixture = await createFixture()
+    const key = createKey()
+    fixture.validateActive.mockRejectedValueOnce(new Error('bounded activation failure'))
+
+    await expect(install(fixture, key)).rejects.toThrow('bounded activation failure')
+
+    expect(await readdir(fixture.directory)).toEqual([])
+  })
+
   it('retains encrypted rollback material until commit', async () => {
     const fixture = await createFixture()
     const original = createKey()

@@ -62,6 +62,7 @@ export const runHostPreflight = async ({
   fetchImpl = fetch,
   operation,
   ownerUid = 0,
+  principal,
   roots = {
     config: '/etc/agora-agent-runner',
     custodyLauncher: '/usr/local/sbin/agora-agent-custody',
@@ -72,12 +73,16 @@ export const runHostPreflight = async ({
   run = runCommand,
   service
 }) => {
-  if (!digestPattern.test(digest) || !['install', 'rotate'].includes(operation)) {
+  if (
+    !digestPattern.test(digest)
+    || !['install', 'recover', 'rotate'].includes(operation)
+    || !/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(principal)
+  ) {
     throw new Error('Host preflight input is invalid.')
   }
   const user = runnerServiceUser(service)
   const releaseRoot = path.join(roots.releases, digest)
-  const recovery = `npm run agent-provision:host -- preflight --digest ${digest} --operation ${operation} --service ${service}`
+  const recovery = `npm run agent-provision:host -- preflight --principal ${principal.toLowerCase()} --digest ${digest} --operation ${operation} --service ${service}`
   await withStage({ code: 'artifact_invalid', recovery, stage: 'artifact_readiness' }, async () => {
     const metadata = await lstat(releaseRoot)
     if (!metadata.isDirectory() || metadata.isSymbolicLink()) throw new Error('noncanonical')
@@ -120,7 +125,9 @@ export const runHostPreflight = async ({
     if (state.FragmentPath !== unitPath || state.LoadState !== 'loaded') {
       throw new Error('unit not loaded')
     }
-    if (operation === 'install' && (state.ActiveState !== 'inactive' || state.UnitFileState !== 'disabled')) {
+    if (['install', 'recover'].includes(operation) && (
+      state.ActiveState !== 'inactive' || state.UnitFileState !== 'disabled'
+    )) {
       throw new Error('initial unit already active')
     }
     if (operation === 'rotate' && (state.ActiveState !== 'active' || state.UnitFileState !== 'enabled')) {
@@ -158,5 +165,5 @@ export const runHostPreflight = async ({
     )
   })
 
-  return { artifactDigest: digest, operation, service, user }
+  return { agentPrincipalId: principal.toLowerCase(), artifactDigest: digest, operation, service, user }
 }

@@ -8,6 +8,7 @@ const lifecycleFunctions = [
   'get_agent_provisioning_readiness',
   'issue_initial_agent_application_key',
   'prepare_agent_principal',
+  'record_agent_host_readiness',
   'revoke_agent_application_key',
   'rollback_agent_application_key_rotation'
 ]
@@ -15,6 +16,7 @@ const lifecycleFunctions = [
 const agentFunctions = [
   'agent_application_key_digest',
   'agent_application_key_is_well_formed',
+  'begin_agent_application_key_rotation_unguarded',
   'current_agent_application_key',
   'current_agent_principal_id',
   'current_principal_id',
@@ -86,6 +88,17 @@ describe('agent-key database catalog security', () => {
       ) as service_role
     `))
     expect(legacy.rows).toEqual([{ service_role: false }])
+
+    const unguardedRotation = await withDatabase((database) => database.query<{
+      service_role: boolean
+    }>(`
+      select has_function_privilege(
+        'service_role',
+        'public.begin_agent_application_key_rotation_unguarded(uuid)',
+        'execute'
+      ) as service_role
+    `))
+    expect(unguardedRotation.rows).toEqual([{ service_role: false }])
   })
 
   it('exposes only the RLS resolver and audit-safe operator view', async () => {
@@ -96,6 +109,7 @@ describe('agent-key database catalog security', () => {
       anon_audit_view: boolean
       service_agent_keys: boolean
       service_audit_view: boolean
+      service_readiness_table: boolean
     }>(`
       select
         (select relrowsecurity from pg_class where oid = 'public.agent_application_keys'::regclass)
@@ -109,7 +123,9 @@ describe('agent-key database catalog security', () => {
         has_table_privilege('service_role', 'public.agent_application_keys', 'select')
           as service_agent_keys,
         has_table_privilege('service_role', 'public.agent_application_key_audit', 'select')
-          as service_audit_view
+          as service_audit_view,
+        has_table_privilege('service_role', 'public.agent_host_readiness_capabilities', 'select')
+          as service_readiness_table
     `))
 
     expect(result.rows).toEqual([{
@@ -118,7 +134,8 @@ describe('agent-key database catalog security', () => {
       anon_agent_resolver: true,
       anon_audit_view: false,
       service_agent_keys: false,
-      service_audit_view: true
+      service_audit_view: true,
+      service_readiness_table: false
     }])
   })
 })

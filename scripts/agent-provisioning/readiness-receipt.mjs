@@ -3,8 +3,9 @@ import { createHash } from 'node:crypto'
 const prefix = 'agora_host_ready_v1'
 const maximumAgeMs = 15 * 60 * 1000
 const receiptPattern = /^agora_host_ready_v1\.([A-Za-z0-9_-]+)\.([a-f0-9]{64})$/
-const servicePattern = /^agora-agent-runner@[A-Za-z0-9_.-]+\.service$/
+const servicePattern = /^agora-agent-runner@[a-z_][a-z0-9_-]{0,30}\.service$/
 const digestPattern = /^[a-f0-9]{64}$/
+const uuidPattern = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i
 
 const digest = (value) => createHash('sha256').update(value).digest('hex')
 
@@ -21,11 +22,12 @@ const decode = (value) => {
 const validatePayload = (payload, now) => {
   if (
     !payload
-    || Object.keys(payload).sort().join(',') !== 'artifactDigest,checkedAt,operation,service,version'
+    || Object.keys(payload).sort().join(',') !== 'agentPrincipalId,artifactDigest,checkedAt,operation,service,version'
     || payload.version !== 1
+    || !uuidPattern.test(payload.agentPrincipalId)
     || !digestPattern.test(payload.artifactDigest)
     || !servicePattern.test(payload.service)
-    || !['install', 'rotate'].includes(payload.operation)
+    || !['install', 'recover', 'rotate'].includes(payload.operation)
     || !Number.isSafeInteger(payload.checkedAt)
     || payload.checkedAt > now
     || now - payload.checkedAt > maximumAgeMs
@@ -36,8 +38,9 @@ const validatePayload = (payload, now) => {
   return payload
 }
 
-export const createReadinessReceipt = ({ artifactDigest, now = Date.now(), operation, service }) => {
+export const createReadinessReceipt = ({ agentPrincipalId, artifactDigest, now = Date.now(), operation, service }) => {
   const encoded = encode(validatePayload({
+    agentPrincipalId: agentPrincipalId.toLowerCase(),
     artifactDigest,
     checkedAt: now,
     operation,

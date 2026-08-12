@@ -22,7 +22,7 @@ const commandArgs = (fingerprint) => [
   launcherPath,
   'install',
   '--service',
-  'agora-agent-runner.service',
+  'agora-agent-runner@test.service',
   '--fingerprint',
   fingerprint
 ]

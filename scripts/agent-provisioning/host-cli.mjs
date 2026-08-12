@@ -16,7 +16,7 @@ import { writeProvisioningFailure } from './failure.mjs'
 
 const usage = `Usage:
   host-cli.mjs install-artifact --artifact DIRECTORY --config FILE --digest SHA256 --service UNIT
-  host-cli.mjs preflight --digest SHA256 --operation install|rotate --service UNIT
+  host-cli.mjs preflight --principal AGENT_PRINCIPAL_ID --digest SHA256 --operation install|recover|rotate --service UNIT
   host-cli.mjs cleanup --digest SHA256 --service UNIT`
 const systemctlPath = '/usr/bin/systemctl'
 const roots = {
@@ -34,7 +34,7 @@ const parseOptions = (args) => {
 
   for (let index = 0; index < pairs.length; index += 2) {
     const name = pairs[index]
-    if (!['--artifact', '--config', '--digest', '--operation', '--service'].includes(name)) {
+    if (!['--artifact', '--config', '--digest', '--operation', '--principal', '--service'].includes(name)) {
       throw new Error(usage)
     }
     if (options[name.slice(2)] !== undefined) throw new Error(usage)
@@ -100,7 +100,7 @@ export const runHostCommand = async (args, {
   }
 
   if (command === 'install-artifact') {
-    if (!options.artifact || !options.config || !options.digest || !options.service || options.operation) {
+    if (!options.artifact || !options.config || !options.digest || !options.service || options.operation || options.principal) {
       throw new Error(usage)
     }
     const installed = await install({ ...options, roots })
@@ -115,11 +115,12 @@ export const runHostCommand = async (args, {
   }
 
   if (command === 'preflight') {
-    if (!options.digest || !options.operation || !options.service || options.artifact || options.config) {
+    if (!options.digest || !options.operation || !options.principal || !options.service || options.artifact || options.config) {
       throw new Error(usage)
     }
     await preflight({ ...options, roots, run })
     write(`${createReadinessReceipt({
+      agentPrincipalId: options.principal,
       artifactDigest: options.digest,
       operation: options.operation,
       service: options.service
@@ -128,7 +129,7 @@ export const runHostCommand = async (args, {
   }
 
   if (command === 'cleanup') {
-    if (!options.digest || !options.service || options.artifact || options.config || options.operation) {
+    if (!options.digest || !options.service || options.artifact || options.config || options.operation || options.principal) {
       throw new Error(usage)
     }
     await cleanup(options, run)

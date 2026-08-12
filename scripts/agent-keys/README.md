@@ -11,8 +11,8 @@ Initial provisioning is readiness-gated and documented as one sequence in
 [`ops/agent-provisioning/README.md`](../../ops/agent-provisioning/README.md).
 Do not use the legacy low-level provisioning RPC for operator work. The public
 operator CLI separates `prepare`, `preflight`, and `issue`, and the initial key
-cannot be issued until both authorized membership and a fresh host-readiness
-receipt are present.
+cannot be issued until both authorized membership and a fresh, single-use,
+principal-bound server readiness capability are present.
 
 ## Operator issuance
 
@@ -23,7 +23,7 @@ npm run agent-keys:operator -- prepare 'Agent display name'
 npm run agent-keys:operator -- preflight AGENT_PRINCIPAL_ID \
   --host-readiness HOST_READINESS_RECEIPT
 npm run agent-keys:operator -- issue AGENT_PRINCIPAL_ID \
-  --host-readiness HOST_READINESS_RECEIPT
+  --readiness-capability READINESS_CAPABILITY_ID
 ```
 
 Local development discovers the loopback Supabase service-role configuration
@@ -89,7 +89,15 @@ Use this exact ordering:
 Commands:
 
 ```sh
-npm run agent-keys:operator -- rotate-begin AGENT_PRINCIPAL_ID
+npm run agent-provision:host -- preflight \
+  --principal AGENT_PRINCIPAL_ID \
+  --digest ARTIFACT_DIGEST \
+  --operation rotate \
+  --service agora-agent-runner@my-user.service
+npm run agent-keys:operator -- preflight AGENT_PRINCIPAL_ID \
+  --host-readiness HOST_READINESS_RECEIPT
+npm run agent-keys:operator -- rotate-begin AGENT_PRINCIPAL_ID \
+  --readiness-capability READINESS_CAPABILITY_ID
 /usr/local/sbin/agora-agent-custody rotate \
   --service agora-agent-runner@my-user.service \
   --fingerprint sha256:0123456789abcdef
