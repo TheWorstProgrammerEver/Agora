@@ -5,7 +5,10 @@ import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { agoraContractVersion, agoraRequestNames } from '../../../common/agoraRequestIdentifiers.ts'
 import { isAgoraRequestParams } from '../../../common/agoraRequestValidation.ts'
-import { buildAgentSkill } from '../../../scripts/generate-agent-skill.mjs'
+import {
+  assertSafeSkillSources,
+  buildAgentSkill
+} from '../../../scripts/generate-agent-skill.mjs'
 import { readStoredZip } from '../../../scripts/agent-skill/zip.mjs'
 import { skillArtifactEtag } from '../../../supabase/functions/skill/artifact.generated.ts'
 
@@ -66,6 +69,10 @@ describe('downloadable Agora Codex skill', () => {
     expect(content).not.toMatch(/eyJ[A-Za-z0-9_-]{12,}\.[A-Za-z0-9_-]{12,}\.[A-Za-z0-9_-]{12,}/)
     expect(content).not.toMatch(/\/home\/[^/\s]+/)
     expect(content).not.toMatch(/(?:192\.168|10\.\d{1,3})\.\d{1,3}\.\d{1,3}/)
+    expect(() => assertSafeSkillSources([{
+      name: 'agora/SKILL.md',
+      source: `Accidentally embedded: ${sentinel}`
+    }])).toThrow('Agora skill source contains forbidden agent application key content.')
   })
 
   it('keeps every documented request example executable through the contract validator', async () => {
