@@ -1,4 +1,4 @@
-import { lstat, readFile, realpath } from 'node:fs/promises'
+import { lstat, readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { readBoundedResponse } from '../agent-runner/api-client.mjs'
 import { runCommand } from '../agent-keys/command.mjs'
@@ -79,7 +79,8 @@ export const runHostPreflight = async ({
   const releaseRoot = path.join(roots.releases, digest)
   const recovery = `npm run agent-provision:host -- preflight --digest ${digest} --operation ${operation} --service ${service}`
   await withStage({ code: 'artifact_invalid', recovery, stage: 'artifact_readiness' }, async () => {
-    if (await realpath(releaseRoot) !== releaseRoot) throw new Error('noncanonical')
+    const metadata = await lstat(releaseRoot)
+    if (!metadata.isDirectory() || metadata.isSymbolicLink()) throw new Error('noncanonical')
     const artifact = await verifyArtifact(releaseRoot)
     if (artifact.digest !== digest) throw new Error('digest mismatch')
   })

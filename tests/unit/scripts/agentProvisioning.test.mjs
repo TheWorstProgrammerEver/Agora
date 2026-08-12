@@ -176,16 +176,20 @@ describe('runner artifact installation', () => {
     })
   })
 
-  it('proves the complete non-secret host readiness sequence', async () => {
+  it('proves host readiness below a canonical final entry with an aliased ancestor', async () => {
     const fixture = await createFixture()
     const artifact = path.join(fixture, 'artifact')
     const config = path.join(fixture, 'runner.conf')
+    const installedRoot = path.join(fixture, 'installed-root')
+    const installedAlias = path.join(fixture, 'installed-alias')
+    await mkdir(installedRoot)
+    await symlink(installedRoot, installedAlias, 'dir')
     const roots = {
-      config: path.join(fixture, 'etc/agora-agent-runner'),
-      custodyLauncher: path.join(fixture, 'usr/local/sbin/agora-agent-custody'),
-      launcher: path.join(fixture, 'usr/local/bin/agora-agent-runner'),
-      releases: path.join(fixture, 'opt/agora/releases'),
-      systemd: path.join(fixture, 'etc/systemd/system')
+      config: path.join(installedAlias, 'etc/agora-agent-runner'),
+      custodyLauncher: path.join(installedAlias, 'usr/local/sbin/agora-agent-custody'),
+      launcher: path.join(installedAlias, 'usr/local/bin/agora-agent-runner'),
+      releases: path.join(installedAlias, 'opt/agora/releases'),
+      systemd: path.join(installedAlias, 'etc/systemd/system')
     }
     await mkdir(artifact)
     const digest = await createArtifact(artifact)
