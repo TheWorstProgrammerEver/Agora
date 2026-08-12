@@ -4,6 +4,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   rm,
   stat,
   symlink,
@@ -102,7 +103,17 @@ const createGlobalCodexLayout = async () => {
     chmod(runtime, 0o700),
     symlink('../lib/node_modules/@openai/codex/bin/codex.js', publicLauncher)
   ])
-  return { packageRoot, platformRoot, publicLauncher, runtimeDirectory }
+  const [resolvedPackageRoot, resolvedPlatformRoot, resolvedRuntimeDirectory] = await Promise.all([
+    realpath(packageRoot),
+    realpath(platformRoot),
+    realpath(runtimeDirectory)
+  ])
+  return {
+    packageRoot: resolvedPackageRoot,
+    platformRoot: resolvedPlatformRoot,
+    publicLauncher,
+    runtimeDirectory: resolvedRuntimeDirectory
+  }
 }
 
 afterEach(async () => {
