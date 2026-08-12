@@ -86,14 +86,26 @@ export const createOperatorClient = () => {
       }),
       'Agent deactivation'
     ),
-    provisionAgent: async (displayName) => requireIssuance(
+    getProvisioningReadiness: async (principalId) => requireSuccessfulRpc(
+      await client.rpc('get_agent_provisioning_readiness', {
+        agent_principal_id_to_check: principalId
+      }),
+      'Agent provisioning readiness'
+    ),
+    issueInitialKey: async (principalId) => requireIssuance(
       requireSuccessfulRpc(
-        await client.rpc('provision_agent_principal', {
-          display_name_to_use: displayName
+        await client.rpc('issue_initial_agent_application_key', {
+          agent_principal_id_to_issue: principalId
         }),
-        'Agent provisioning'
+        'Initial agent key issuance'
       ),
-      'Agent provisioning'
+      'Initial agent key issuance'
+    ),
+    prepareAgent: async (displayName) => requireSuccessfulRpc(
+      await client.rpc('prepare_agent_principal', {
+        display_name_to_use: displayName
+      }),
+      'Agent preparation'
     ),
     revokeKey: async (keyId, reason) => requireSuccessfulRpc(
       await client.rpc('revoke_agent_application_key', {

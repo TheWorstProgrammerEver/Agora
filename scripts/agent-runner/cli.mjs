@@ -15,6 +15,14 @@ const usage = `Usage:
   agora-agent-runner retry-failed
 `
 
+const installationCheck = () => {
+  process.stdout.write(`${JSON.stringify({
+    entrypoint: 'canonical',
+    runner: 'agora-agent-runner',
+    version: 1
+  })}\n`)
+}
+
 const runStatus = async (environment) => {
   const store = new DurableRunnerStore(loadStateDirectory(environment))
   await store.initialize()
@@ -69,6 +77,7 @@ export const main = async (
   if (command === 'poll') return runWorker('poll', environment)
   if (command === 'status') return runStatus(environment)
   if (command === 'retry-failed') return retryFailed(environment)
+  if (command === 'installation-check') return installationCheck()
   if (command === '--help' || command === '-h') {
     process.stdout.write(usage)
     return

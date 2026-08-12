@@ -98,7 +98,9 @@ Use `npm run agent-runner` for the long-lived private WebSocket mode or
 install `ops/systemd/agora-agent-runner@.service`; it receives the per-agent key
 only through the encrypted systemd credential named `agora-agent-key`. Installation,
 configuration, private state, health inspection, recovery, and operator commands
-are documented in `ops/agent-runner/README.md`.
+are documented in `ops/agent-runner/README.md`. The single readiness-first
+production and disposable-local installation sequence is documented in
+`ops/agent-provisioning/README.md`.
 
 ## Security Integration Tests
 

@@ -6,6 +6,7 @@ import { fingerprintApplicationKey } from '../../../scripts/agent-keys/key-forma
 import { runOperatorCommand } from '../../../scripts/agent-keys/operator-cli.mjs'
 import { runCredentialCommand } from '../../../scripts/agent-keys/systemd-credential-cli.mjs'
 import { createSystemdServiceControl } from '../../../scripts/agent-keys/systemd-service.mjs'
+import { createReadinessReceipt } from '../../../scripts/agent-provisioning/readiness-receipt.mjs'
 
 const createKey = () => `agora_agent_v1_${randomBytes(32).toString('base64url')}`
 
@@ -20,32 +21,97 @@ const createTerminal = (isTTY = true) => {
 }
 
 describe('operator agent-key CLI', () => {
-  it('refuses non-interactive issuance before calling the operator API', async () => {
-    const client = { provisionAgent: vi.fn() }
+  const readyReceipt = () => createReadinessReceipt({
+    artifactDigest: 'a'.repeat(64),
+    operation: 'install',
+    service: 'agora-agent-runner@test.service'
+  })
 
-    await expect(runOperatorCommand(['provision', 'Test agent'], {
+  const readyRow = (principalId) => ({
+    agent_principal_id: principalId,
+    authorized_group_count: 1,
+    is_active: true,
+    live_key_count: 0,
+    ready_for_initial_key: true
+  })
+
+  it('prepares a principal without issuing a key', async () => {
+    const principalId = randomUUID()
+    const client = {
+      issueInitialKey: vi.fn(),
+      prepareAgent: vi.fn(async () => [{
+        agent_principal_id: principalId,
+        display_name: 'Test agent'
+      }])
+    }
+    const terminal = createTerminal(false)
+
+    await runOperatorCommand(['prepare', 'Test agent'], { client, terminal })
+
+    expect(client.prepareAgent).toHaveBeenCalledWith('Test agent')
+    expect(client.issueInitialKey).not.toHaveBeenCalled()
+    expect(terminal.output.join('')).not.toContain('agora_agent_v1_')
+  })
+
+  it('refuses non-interactive issuance after non-secret readiness without issuing a key', async () => {
+    const principalId = randomUUID()
+    const client = {
+      getProvisioningReadiness: vi.fn(async () => [readyRow(principalId)]),
+      issueInitialKey: vi.fn()
+    }
+
+    await expect(runOperatorCommand(['issue', principalId, '--host-readiness', readyReceipt()], {
       client,
       terminal: createTerminal(false)
-    })).rejects.toThrow('interactive operator TTY')
-    expect(client.provisionAgent).not.toHaveBeenCalled()
+    })).rejects.toMatchObject({
+      code: 'operator_tty_required',
+      stage: 'key_issuance'
+    })
+    expect(client.issueInitialKey).not.toHaveBeenCalled()
   })
 
   it('shows an issued key exactly once only on the restricted TTY', async () => {
     const applicationKey = createKey()
+    const principalId = randomUUID()
     const terminal = createTerminal()
     const client = {
-      provisionAgent: vi.fn(async () => ({
-        agent_principal_id: randomUUID(),
+      getProvisioningReadiness: vi.fn(async () => [readyRow(principalId)]),
+      issueInitialKey: vi.fn(async () => ({
+        agent_principal_id: principalId,
         application_key: applicationKey,
         application_key_id: randomUUID(),
         key_fingerprint: fingerprintApplicationKey(applicationKey)
       }))
     }
 
-    await runOperatorCommand(['provision', 'Test agent'], { client, terminal })
+    await runOperatorCommand(
+      ['issue', principalId, '--host-readiness', readyReceipt()],
+      { client, terminal }
+    )
 
     expect(terminal.output.join('').split(applicationKey)).toHaveLength(2)
-    expect(client.provisionAgent).toHaveBeenCalledWith('Test agent')
+    expect(client.issueInitialKey).toHaveBeenCalledWith(principalId)
+  })
+
+  it('denies key issuance before group readiness', async () => {
+    const principalId = randomUUID()
+    const client = {
+      getProvisioningReadiness: vi.fn(async () => [{
+        ...readyRow(principalId),
+        authorized_group_count: 0,
+        ready_for_initial_key: false
+      }]),
+      issueInitialKey: vi.fn()
+    }
+
+    await expect(runOperatorCommand(
+      ['issue', principalId, '--host-readiness', readyReceipt()],
+      { client, terminal: createTerminal() }
+    )).rejects.toMatchObject({
+      code: 'authorized_group_required',
+      stage: 'server_readiness'
+    })
+    expect(client.issueInitialKey).not.toHaveBeenCalled()
   })
 
   it('completes rotation using only audit-safe identifiers', async () => {
@@ -166,8 +232,42 @@ describe('host agent-key CLI', () => {
         'org.freedesktop.systemd1.Service',
         'LoadCredentialEncrypted'
       ],
+      ['reset-failed', 'agora-agent-runner.service'],
       ['restart', 'agora-agent-runner.service'],
       ['is-active', '--quiet', 'agora-agent-runner.service']
+    ])
+  })
+
+  it('stops a failed activation and clears only the owned unit start limit', async () => {
+    const run = vi.fn(async (_file, args) => {
+      if (args.includes('GetUnit')) {
+        return Buffer.from(JSON.stringify({
+          type: 'o',
+          data: ['/org/freedesktop/systemd1/unit/agora_2dagent_2drunner_40test_2eservice']
+        }))
+      }
+      if (args.includes('LoadCredentialEncrypted')) {
+        return Buffer.from(JSON.stringify({
+          type: 'a(ss)',
+          data: [['agora-agent-key', '/etc/credstore.encrypted/agora-agent-key.cred']]
+        }))
+      }
+      if (args[0] === 'is-active') throw new Error('native failure must not escape')
+      return Buffer.alloc(0)
+    })
+    const control = createSystemdServiceControl({
+      run,
+      service: 'agora-agent-runner@test.service'
+    })
+
+    await expect(control.activateAndValidate()).rejects.toThrow('native failure must not escape')
+    expect(run.mock.calls.map(([, args]) => args).slice(-6)).toEqual([
+      ['enable', 'agora-agent-runner@test.service'],
+      ['restart', 'agora-agent-runner@test.service'],
+      ['is-active', '--quiet', 'agora-agent-runner@test.service'],
+      ['disable', 'agora-agent-runner@test.service'],
+      ['stop', 'agora-agent-runner@test.service'],
+      ['reset-failed', 'agora-agent-runner@test.service']
     ])
   })
 

@@ -97,6 +97,58 @@ afterAll(async () => {
 })
 
 describe('agent principal issuance', () => {
+  it('requires active group membership before initial key issuance', async () => {
+    const source = requireGroupFixture()
+    const prepared = await admin.rpc('prepare_agent_principal', {
+      display_name_to_use: `Staged security agent ${randomUUID()}`
+    })
+    const principalId = prepared.data?.[0]?.agent_principal_id as string
+
+    expect(prepared.error).toBeNull()
+    expect(principalId).toBeTruthy()
+
+    try {
+      const denied = await admin.rpc('issue_initial_agent_application_key', {
+        agent_principal_id_to_issue: principalId
+      })
+      expect(denied.error?.code).toBe('55000')
+
+      const readinessBefore = await admin.rpc('get_agent_provisioning_readiness', {
+        agent_principal_id_to_check: principalId
+      })
+      expect(readinessBefore.data).toMatchObject([{
+        authorized_group_count: 0,
+        live_key_count: 0,
+        ready_for_initial_key: false
+      }])
+
+      const membership = await admin.from('memberships').insert({
+        group_id: source.groups.visible,
+        principal_id: principalId,
+        role: 'member'
+      })
+      expect(membership.error).toBeNull()
+
+      const readinessAfter = await admin.rpc('get_agent_provisioning_readiness', {
+        agent_principal_id_to_check: principalId
+      })
+      expect(readinessAfter.data).toMatchObject([{
+        authorized_group_count: 1,
+        live_key_count: 0,
+        ready_for_initial_key: true
+      }])
+
+      const issuance = await admin.rpc('issue_initial_agent_application_key', {
+        agent_principal_id_to_issue: principalId
+      })
+      expect(issuance.error).toBeNull()
+      expect(issuance.data).toHaveLength(1)
+      expect(issuance.data?.[0]?.application_key).toMatch(/^agora_agent_v1_[A-Za-z0-9_-]{43}$/)
+    } finally {
+      await deleteAgentFixtures([{ principalId } as AgentFixture])
+    }
+  })
+
   it('stores only a strong digest and exposes audit-safe metadata after issuance', async () => {
     await withAgent(async (agent) => {
       const database = createDatabaseClient('agora-agent-digest-validation')
@@ -157,7 +209,7 @@ describe('agent principal issuance', () => {
       ]
 
       for (const caller of callers) {
-        const provision = await caller.rpc('provision_agent_principal', {
+        const provision = await caller.rpc('prepare_agent_principal', {
           display_name_to_use: 'Unauthorized agent'
         })
         const rotation = await caller.rpc('begin_agent_application_key_rotation', {

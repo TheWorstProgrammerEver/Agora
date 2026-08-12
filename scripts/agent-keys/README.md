@@ -5,12 +5,25 @@ principals. Agents receive one opaque Agora application key, never a Supabase
 secret or service-role key. The database retains only SHA-256 key digests and
 audit-safe fingerprints.
 
+## Guided provisioning
+
+Initial provisioning is readiness-gated and documented as one sequence in
+[`ops/agent-provisioning/README.md`](../../ops/agent-provisioning/README.md).
+Do not use the legacy low-level provisioning RPC for operator work. The public
+operator CLI separates `prepare`, `preflight`, and `issue`, and the initial key
+cannot be issued until both authorized membership and a fresh host-readiness
+receipt are present.
+
 ## Operator issuance
 
 Run issuance only in a restricted interactive operator session:
 
 ```sh
-npm run agent-keys:operator -- provision 'Agent display name'
+npm run agent-keys:operator -- prepare 'Agent display name'
+npm run agent-keys:operator -- preflight AGENT_PRINCIPAL_ID \
+  --host-readiness HOST_READINESS_RECEIPT
+npm run agent-keys:operator -- issue AGENT_PRINCIPAL_ID \
+  --host-readiness HOST_READINESS_RECEIPT
 ```
 
 Local development discovers the loopback Supabase service-role configuration
@@ -44,8 +57,8 @@ child a minimal environment. This works when Node and npm live outside sudo's
 restricted `PATH`.
 
 ```sh
-npm run agent-keys:host -- install \
-  --service agora-agent-runner.service \
+/usr/local/sbin/agora-agent-custody install \
+  --service agora-agent-runner@my-user.service \
   --fingerprint sha256:0123456789abcdef
 ```
 
@@ -65,30 +78,30 @@ Use this exact ordering:
 
 1. Begin rotation in the operator session. The old server key remains valid
    while the new key is pending.
-2. Install the pending key on the host with `agent-keys:host -- rotate`. The
+2. Install the pending key on the host with `agora-agent-custody rotate`. The
    prior encrypted credential is retained only as protected rollback material.
 3. Validate authenticated runner health and message handling with the new key.
 4. Complete rotation server-side with the replacement key ID and validated
    fingerprint. This atomically activates the replacement and revokes the old
    key.
-5. Run `agent-keys:host -- commit` to remove the encrypted rollback artifact.
+5. Run `agora-agent-custody commit` to remove the encrypted rollback artifact.
 
 Commands:
 
 ```sh
 npm run agent-keys:operator -- rotate-begin AGENT_PRINCIPAL_ID
-npm run agent-keys:host -- rotate \
-  --service agora-agent-runner.service \
+/usr/local/sbin/agora-agent-custody rotate \
+  --service agora-agent-runner@my-user.service \
   --fingerprint sha256:0123456789abcdef
 npm run agent-keys:operator -- rotate-complete APPLICATION_KEY_ID sha256:0123456789abcdef
-npm run agent-keys:host -- commit
+/usr/local/sbin/agora-agent-custody commit
 ```
 
 Before server-side completion, rollback restores and validates the old
 encrypted credential before revoking the pending replacement:
 
 ```sh
-npm run agent-keys:host -- rollback --service agora-agent-runner.service
+/usr/local/sbin/agora-agent-custody rollback --service agora-agent-runner@my-user.service
 npm run agent-keys:operator -- rotate-rollback APPLICATION_KEY_ID
 ```
 
@@ -103,7 +116,7 @@ artifact.
 
 ```sh
 npm run agent-keys:operator -- deactivate AGENT_PRINCIPAL_ID 'Incident response'
-npm run agent-keys:host -- revoke --service agora-agent-runner.service
+/usr/local/sbin/agora-agent-custody revoke --service agora-agent-runner@my-user.service
 ```
 
 Provision and validate a replacement only after the incident boundary is

@@ -90,22 +90,11 @@ instance; it does not alter committed cursors or thread IDs.
 
 ## systemd
 
-Deploy the complete repository artifact (including production `node_modules`,
-the handler prompt, and its schema) under a root-owned release directory such
-as `/opt/agora/releases/<revision>`. Point
-`/usr/local/bin/agora-agent-runner` at that release's executable
-`scripts/agent-runner/cli.mjs`; do not copy the CLI without its imported modules.
-Copy `ops/systemd/agora-agent-runner@.service` to the system unit directory with
-mode `0644`, and write the non-secret environment values from
-`ops/systemd/agora-agent-runner.env.example` to
-`/etc/agora-agent-runner/<unix-user>.conf` as root with mode `0600`. The release
-tree and prompt must not be writable by the service account. Then reload,
-enable, and start the exact instance:
-
-```sh
-systemctl daemon-reload
-systemctl enable --now agora-agent-runner@my-user.service
-```
+Use the manifest-verified content-addressed build, installation, readiness,
+credential activation, rollback, and cleanup flow in
+[`ops/agent-provisioning/README.md`](../agent-provisioning/README.md). Manual
+copies, symlink launchers, mutable checkout targets, and direct service
+enablement are unsupported.
 
 The unit is deliberately Linux/systemd-specific. It runs as the selected agent
 user, keeps state private, stops the complete control group, restarts after
@@ -117,7 +106,7 @@ LoadCredentialEncrypted=agora-agent-key:/etc/credstore.encrypted/agora-agent-key
 
 The runner reads only `$CREDENTIALS_DIRECTORY/agora-agent-key`. The public
 environment file is not a credential transport and must never contain the raw
-key. Use the existing `agent-keys:host` no-echo workflow to install, rotate,
+key. Use the installed `agora-agent-custody` no-echo workflow to install, rotate,
 validate, or revoke the encrypted binding.
 
 The service sets `HOME`, `CODEX_HOME`, `WorkingDirectory`, and

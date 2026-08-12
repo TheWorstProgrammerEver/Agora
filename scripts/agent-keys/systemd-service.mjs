@@ -38,48 +38,78 @@ export const createSystemdServiceControl = ({
 }) => {
   const validatedService = validateServiceName(service)
 
-  return {
-    restartAndValidate: async () => {
-      await run(systemctlPath, ['daemon-reload'])
-      const unitOutput = await run(busctlPath, [
-        '--json=short',
-        'call',
-        'org.freedesktop.systemd1',
-        '/org/freedesktop/systemd1',
-        'org.freedesktop.systemd1.Manager',
-        'GetUnit',
-        's',
-        validatedService
-      ], { output: 'buffer' })
-      const [unitObjectPath] = parseJsonOutput(unitOutput, 'o')
+  const validateBinding = async () => {
+    await run(systemctlPath, ['daemon-reload'])
+    const unitOutput = await run(busctlPath, [
+      '--json=short',
+      'call',
+      'org.freedesktop.systemd1',
+      '/org/freedesktop/systemd1',
+      'org.freedesktop.systemd1.Manager',
+      'GetUnit',
+      's',
+      validatedService
+    ], { output: 'buffer' })
+    const [unitObjectPath] = parseJsonOutput(unitOutput, 'o')
 
-      if (!unitObjectPathPattern.test(unitObjectPath)) {
-        throw new Error('Systemd returned an invalid runner service object path.')
-      }
+    if (!unitObjectPathPattern.test(unitObjectPath)) {
+      throw new Error('Systemd returned an invalid runner service object path.')
+    }
 
-      const bindingOutput = await run(busctlPath, [
-        '--json=short',
-        'get-property',
-        'org.freedesktop.systemd1',
-        unitObjectPath,
-        'org.freedesktop.systemd1.Service',
-        'LoadCredentialEncrypted'
-      ], { output: 'buffer' })
-      const bindings = parseJsonOutput(bindingOutput, 'a(ss)')
+    const bindingOutput = await run(busctlPath, [
+      '--json=short',
+      'get-property',
+      'org.freedesktop.systemd1',
+      unitObjectPath,
+      'org.freedesktop.systemd1.Service',
+      'LoadCredentialEncrypted'
+    ], { output: 'buffer' })
+    const bindings = parseJsonOutput(bindingOutput, 'a(ss)')
 
-      if (
-        bindings.length !== 1
-        || bindings[0]?.[0] !== expectedCredentialName
-        || bindings[0]?.[1] !== expectedCredentialPath
-      ) {
-        throw new Error('Runner service does not load the approved encrypted credential path.')
-      }
+    if (
+      bindings.length !== 1
+      || bindings[0]?.[0] !== expectedCredentialName
+      || bindings[0]?.[1] !== expectedCredentialPath
+    ) {
+      throw new Error('Runner service does not load the approved encrypted credential path.')
+    }
+  }
 
+  const reconcileFailedStart = async ({ disable }) => {
+    const commands = disable
+      ? [
+          ['disable', validatedService],
+          ['stop', validatedService],
+          ['reset-failed', validatedService]
+        ]
+      : [
+          ['stop', validatedService],
+          ['reset-failed', validatedService]
+        ]
+    for (const args of commands) {
+      await run(systemctlPath, args).catch(() => undefined)
+    }
+  }
+
+  const startAndValidate = async ({ enable }) => {
+    await validateBinding()
+    await run(systemctlPath, ['reset-failed', validatedService])
+
+    try {
+      if (enable) await run(systemctlPath, ['enable', validatedService])
       await run(systemctlPath, ['restart', validatedService])
       await run(systemctlPath, ['is-active', '--quiet', validatedService])
-    },
+    } catch (error) {
+      await reconcileFailedStart({ disable: enable })
+      throw error
+    }
+  }
+
+  return {
+    activateAndValidate: async () => startAndValidate({ enable: true }),
+    restartAndValidate: async () => startAndValidate({ enable: false }),
     stop: async () => {
-      await run(systemctlPath, ['stop', validatedService])
+      await run(systemctlPath, ['disable', '--now', validatedService])
       const activeState = await run(systemctlPath, [
         'show',
         '--property=ActiveState',
@@ -90,6 +120,8 @@ export const createSystemdServiceControl = ({
       if (!['inactive', 'failed'].includes(activeState.toString('utf8').trim())) {
         throw new Error('Runner service remained active after stop.')
       }
+
+      await run(systemctlPath, ['reset-failed', validatedService])
     }
   }
 }

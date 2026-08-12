@@ -5,7 +5,9 @@ const lifecycleFunctions = [
   'begin_agent_application_key_rotation',
   'complete_agent_application_key_rotation',
   'deactivate_agent_principal',
-  'provision_agent_principal',
+  'get_agent_provisioning_readiness',
+  'issue_initial_agent_application_key',
+  'prepare_agent_principal',
   'revoke_agent_application_key',
   'rollback_agent_application_key_rotation'
 ]
@@ -19,6 +21,7 @@ const agentFunctions = [
   'enforce_provisioned_agent_principal',
   'generate_agent_application_key',
   'protect_provisioned_agent_principal',
+  'provision_agent_principal',
   ...lifecycleFunctions
 ]
 
@@ -74,6 +77,15 @@ describe('agent-key database catalog security', () => {
 
     expect(rows).toHaveLength(lifecycleFunctions.length)
     expect(rows.every((row) => !row.anon && !row.authenticated && row.service_role)).toBe(true)
+
+    const legacy = await withDatabase((database) => database.query<{ service_role: boolean }>(`
+      select has_function_privilege(
+        'service_role',
+        'public.provision_agent_principal(text)',
+        'execute'
+      ) as service_role
+    `))
+    expect(legacy.rows).toEqual([{ service_role: false }])
   })
 
   it('exposes only the RLS resolver and audit-safe operator view', async () => {

@@ -143,7 +143,7 @@ const assertNonTtyDenial = async () => {
     fingerprintApplicationKey(marker)
   ), { input: Buffer.from(`${marker}\n`) })
 
-  if (result.code === 0 || !result.output.includes('interactive TTY')) {
+  if (result.code === 0 || !result.output.includes('"code":"tty_required"')) {
     throw new Error('Production host entrypoint did not reject redirected input.')
   }
 
@@ -162,7 +162,7 @@ const assertPtySuccessBoundary = async () => {
 
   if (
     result.code === 0
-    || !result.output.includes('does not match the expected fingerprint')
+    || !result.output.includes('"code":"fingerprint_mismatch"')
     || !result.output.includes('TTY_STATE_RESTORED')
   ) {
     throw new Error('Production PTY success boundary did not fail safely after input.')
@@ -180,7 +180,7 @@ const assertPtyCancellation = async () => {
 
   if (
     result.code === 0
-    || !result.output.includes('entry was cancelled')
+    || !result.output.includes('"code":"entry_canceled"')
     || !result.output.includes('TTY_STATE_RESTORED')
   ) {
     throw new Error('Production PTY cancellation did not restore terminal state.')

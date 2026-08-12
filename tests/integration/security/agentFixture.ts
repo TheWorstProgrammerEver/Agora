@@ -30,14 +30,19 @@ const requireSingleIssuance = (
 }
 
 export const provisionAgentFixture = async (displayName: string): Promise<AgentFixture> => {
-  const { data, error } = await createAdminClient().rpc('provision_agent_principal', {
-    display_name_to_use: displayName
-  })
-  const issuance = requireSingleIssuance(
-    data as AgentIssuance[] | null,
-    error,
-    'Agent provisioning'
-  )
+  const database = createDatabaseClient('agora-agent-fixture-provisioning')
+  await database.connect()
+  let issuance: AgentIssuance
+
+  try {
+    const { rows } = await database.query<AgentIssuance>(
+      'select * from public.provision_agent_principal($1)',
+      [displayName]
+    )
+    issuance = requireSingleIssuance(rows, null, 'Agent fixture provisioning')
+  } finally {
+    await database.end()
+  }
 
   return {
     applicationKey: issuance.application_key,

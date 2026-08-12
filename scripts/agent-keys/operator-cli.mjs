@@ -2,9 +2,13 @@
 import { pathToFileURL } from 'node:url'
 import { createOperatorClient } from './operator-client.mjs'
 import { validateFingerprint } from './key-format.mjs'
+import { fail, writeProvisioningFailure } from '../agent-provisioning/failure.mjs'
+import { parseReadinessReceipt } from '../agent-provisioning/readiness-receipt.mjs'
 
 const usage = `Usage:
-  operator-cli.mjs provision DISPLAY_NAME
+  operator-cli.mjs prepare DISPLAY_NAME
+  operator-cli.mjs preflight AGENT_PRINCIPAL_ID --host-readiness RECEIPT
+  operator-cli.mjs issue AGENT_PRINCIPAL_ID --host-readiness RECEIPT
   operator-cli.mjs rotate-begin AGENT_PRINCIPAL_ID
   operator-cli.mjs rotate-complete APPLICATION_KEY_ID FINGERPRINT
   operator-cli.mjs rotate-rollback APPLICATION_KEY_ID
@@ -18,12 +22,16 @@ const validateUuid = (value) => {
     throw new Error('Operator identifier is malformed.')
   }
 
-  return value
+  return value.toLowerCase()
 }
 
 const requireIssuanceTerminal = (terminal) => {
   if (!terminal.isTTY) {
-    throw new Error('Raw Agora agent keys are issued only to an interactive operator TTY.')
+    fail(
+      'key_issuance',
+      'operator_tty_required',
+      'npm run agent-keys:operator -- --help'
+    )
   }
 }
 
@@ -35,6 +43,63 @@ const writeIssuance = (terminal, issuance) => {
   terminal.write(`${issuance.application_key}\n`)
 }
 
+const requireSingleRow = (rows, operation) => {
+  if (!Array.isArray(rows) || rows.length !== 1) {
+    throw new Error(`${operation} did not return one row.`)
+  }
+
+  return rows[0]
+}
+
+const parseHostReadiness = (args) => {
+  if (args.length !== 2 || args[0] !== '--host-readiness') throw new Error(usage)
+  return { payload: parseReadinessReceipt(args[1]), receipt: args[1] }
+}
+
+const requireReadinessRow = (rows, principalId, receipt) => {
+  if (!Array.isArray(rows) || rows.length !== 1) {
+    fail(
+      'server_readiness',
+      'principal_unavailable',
+      `npm run agent-keys:operator -- preflight ${principalId} --host-readiness ${receipt}`
+    )
+  }
+
+  return rows[0]
+}
+
+const requireServerReadiness = (row, principalId, receipt) => {
+  if (row.agent_principal_id !== principalId) {
+    fail(
+      'server_readiness',
+      'principal_unavailable',
+      `npm run agent-keys:operator -- preflight ${principalId} --host-readiness ${receipt}`
+    )
+  }
+
+  if (!row.is_active) {
+    fail('server_readiness', 'principal_inactive', 'npm run agent-keys:operator -- prepare NEW_DISPLAY_NAME')
+  }
+
+  if (Number(row.authorized_group_count) < 1) {
+    fail(
+      'server_readiness',
+      'authorized_group_required',
+      `npm run agent-keys:operator -- preflight ${principalId} --host-readiness ${receipt}`
+    )
+  }
+
+  if (Number(row.live_key_count) !== 0 || !row.ready_for_initial_key) {
+    fail(
+      'server_readiness',
+      'initial_key_state_conflict',
+      `npm run agent-keys:operator -- rotate-begin ${principalId}`
+    )
+  }
+
+  return row
+}
+
 export const runOperatorCommand = async (args, {
   client,
   terminal = process.stdout
@@ -42,9 +107,49 @@ export const runOperatorCommand = async (args, {
   const [command, first, ...rest] = args
   const operatorClient = () => client ?? createOperatorClient()
 
-  if (command === 'provision' && first && rest.length === 0) {
+  if ((command === '--help' || command === '-h') && !first) {
+    terminal.write(`${usage}\n`)
+    return
+  }
+
+  if (command === 'prepare' && first && rest.length === 0) {
+    const prepared = requireSingleRow(
+      await operatorClient().prepareAgent(first),
+      'Agent preparation'
+    )
+    terminal.write(`${JSON.stringify({
+      agentPrincipalId: prepared.agent_principal_id,
+      displayName: prepared.display_name,
+      stage: 'principal_prepared'
+    })}\n`)
+    return
+  }
+
+  if (['preflight', 'issue'].includes(command) && first) {
+    const { payload, receipt } = parseHostReadiness(rest)
+    const principalId = validateUuid(first)
+    const readiness = requireServerReadiness(
+      requireReadinessRow(
+        await operatorClient().getProvisioningReadiness(principalId),
+        principalId,
+        receipt
+      ),
+      principalId,
+      receipt
+    )
+
+    if (command === 'preflight') {
+      terminal.write(`${JSON.stringify({
+        agentPrincipalId: principalId,
+        artifactDigest: payload.artifactDigest,
+        authorizedGroupCount: Number(readiness.authorized_group_count),
+        stage: 'ready_for_key_issuance'
+      })}\n`)
+      return
+    }
+
     requireIssuanceTerminal(terminal)
-    writeIssuance(terminal, await operatorClient().provisionAgent(first))
+    writeIssuance(terminal, await operatorClient().issueInitialKey(principalId))
     return
   }
 
@@ -83,7 +188,11 @@ export const runOperatorCommand = async (args, {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   runOperatorCommand(process.argv.slice(2)).catch((error) => {
-    process.stderr.write(`ERROR: ${error.message}\n`)
+    writeProvisioningFailure(error, {
+      code: 'operator_command_failed',
+      recovery: 'npm run agent-keys:operator -- --help',
+      stage: 'operator'
+    })
     process.exitCode = 1
   })
 }
