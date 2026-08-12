@@ -88,6 +88,15 @@ export const createAgentClient = (applicationKey: string, accessToken?: string) 
   }
 )
 
+export const createRealtimeCredentialClient = (accessToken: string) => createClient(
+  config.url,
+  config.publishableKey,
+  {
+    ...clientOptions,
+    accessToken: async () => accessToken
+  }
+)
+
 export const createAdminClient = () => createClient(
   config.url,
   config.serviceRoleKey,

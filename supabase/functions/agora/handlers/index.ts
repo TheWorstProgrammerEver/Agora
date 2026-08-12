@@ -8,6 +8,7 @@ import type { AgoraRequestHandlerFactory } from './factory.ts'
 import { groupHandlerFactories } from './groups/index.ts'
 import { membershipHandlerFactories } from './memberships/index.ts'
 import { messageHandlerFactories } from './messages/index.ts'
+import { realtimeHandlerFactories } from './realtime/index.ts'
 import { unavailableHandlerFactories } from './unavailable.ts'
 
 const mergeFactories = (overrides: AgoraRequestHandlerFactory[]) => {
@@ -31,6 +32,10 @@ const mergeFactories = (overrides: AgoraRequestHandlerFactory[]) => {
   }
 
   for (const factory of messageHandlerFactories) {
+    byIdentifier.set(factory.identifier, factory)
+  }
+
+  for (const factory of realtimeHandlerFactories) {
     byIdentifier.set(factory.identifier, factory)
   }
 

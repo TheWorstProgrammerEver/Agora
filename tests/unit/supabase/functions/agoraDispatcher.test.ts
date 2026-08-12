@@ -10,7 +10,7 @@ const createContext = (kind: 'agent' | 'human') => ({
 })
 
 describe('Agora Edge dispatcher', () => {
-  it('registers the complete catalog fail closed until domain handlers land', async () => {
+  it('registers the completed Realtime handler in the canonical catalog', async () => {
     const dispatcher = createAgoraDispatcher(createContext('human'))
 
     await expect(dispatcher.dispatch({
@@ -18,7 +18,7 @@ describe('Agora Edge dispatcher', () => {
       params: {
         groupIds: [randomUUID()]
       }
-    })).rejects.toThrow('Agora request handler is not implemented yet.')
+    })).rejects.toMatchObject({ status: 403 })
   })
 
   it('routes human and agent contexts through the same typed handler factory', async () => {

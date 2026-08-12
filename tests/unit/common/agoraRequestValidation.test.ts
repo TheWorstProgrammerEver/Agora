@@ -4,6 +4,7 @@ import {
   maximumMessagePageSize,
   maximumMessageTextLength
 } from '../../../common/agoraMessageLimits'
+import { maximumRealtimeTopicsPerSession } from '../../../common/agoraRealtime'
 import { agoraRequestIdentifiers } from '../../../common/agoraRequestIdentifiers'
 import { isAgoraRequestParams } from '../../../common/agoraRequestValidation'
 
@@ -69,6 +70,18 @@ describe('Agora request parameter validation', () => {
     })).toBe(false)
     expect(isAgoraRequestParams(agoraRequestIdentifiers.createGroup, {
       name: 'x'.repeat(121)
+    })).toBe(false)
+    expect(isAgoraRequestParams(agoraRequestIdentifiers.createRealtimeSession, {
+      groupIds: []
+    })).toBe(false)
+    expect(isAgoraRequestParams(agoraRequestIdentifiers.createRealtimeSession, {
+      groupIds: [firstId, firstId]
+    })).toBe(false)
+    expect(isAgoraRequestParams(agoraRequestIdentifiers.createRealtimeSession, {
+      groupIds: Array.from(
+        { length: maximumRealtimeTopicsPerSession + 1 },
+        (_, index) => `10000000-0000-4000-8000-${String(index).padStart(12, '0')}`
+      )
     })).toBe(false)
   })
 

@@ -83,6 +83,7 @@ describe.sequential('anonymous health endpoint', () => {
     `)
 
     expect(functions.rows.filter(({ allowed }) => allowed)).toEqual([
+      { allowed: true, function_name: 'authorize_agora_realtime_topics' },
       { allowed: true, function_name: 'current_agent_principal_id' },
       { allowed: true, function_name: 'current_principal_id' },
       { allowed: true, function_name: 'current_principal_is_group_member' },

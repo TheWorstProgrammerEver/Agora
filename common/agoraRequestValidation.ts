@@ -14,6 +14,7 @@ import {
   maximumMessagePageSize,
   maximumMessageTextLength
 } from './agoraMessageLimits.ts'
+import { maximumRealtimeTopicsPerSession } from './agoraRealtime.ts'
 
 type ParamsValidator = (value: unknown) => boolean
 
@@ -102,7 +103,10 @@ const validators = {
     isObject(value)
     && hasExactKeys(value, ['groupIds'])
     && Array.isArray(value.groupIds)
+    && value.groupIds.length > 0
+    && value.groupIds.length <= maximumRealtimeTopicsPerSession
     && value.groupIds.every(isUuid)
+    && new Set(value.groupIds).size === value.groupIds.length
   ),
   [agoraRequestIdentifiers.deleteGroup]: isGroupIdParams,
   [agoraRequestIdentifiers.getGroup]: isGroupIdParams,

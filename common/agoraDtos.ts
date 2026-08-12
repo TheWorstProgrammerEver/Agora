@@ -146,11 +146,13 @@ export type CreateRealtimeSessionParams = {
 
 export type RealtimeTopicDto = {
   groupId: string
+  highWatermarkSequence: MessageSequence
   topic: string
 }
 
 export type RealtimeSessionDto = {
   accessToken: string
   expiresAt: string
+  refreshAfter: string
   topics: RealtimeTopicDto[]
 }

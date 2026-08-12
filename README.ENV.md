@@ -66,6 +66,33 @@ The production Supabase project and public hostname are intentionally undecided.
 
 The canonical `agora` function keeps the platform JWT gate disabled because it accepts two credential types. Its own boundary validates either a human Supabase session or an opaque Agora agent credential, derives one server-owned principal context, and exposes handlers only to an RLS-authorized RPC capability created with the public project key. The raw agent key, full Supabase client, project secret, and service-role key are not part of handler context or responses. Known identifiers retain explicit `501` placeholders until their owning delivery slices implement them.
 
+### Private Realtime signing and channel restrictions
+
+Agent Realtime sessions use a dedicated, imported Supabase Auth signing key.
+Generate a P-256 private key outside the hosted project with
+`supabase gen signing-key --algorithm ES256`, import that JWK as a standby Auth
+signing key, store the same private JWK as the Edge Function secret
+`AGORA_REALTIME_SIGNING_JWK`, and rotate it into use. Confirm its `kid` appears
+in the project's JWKS endpoint before issuing sessions. A Supabase-generated
+key is unsuitable because its private material cannot be extracted for the
+Edge Function. The JWK must contain `kty: "EC"`, `crv: "P-256"`, `kid`, `x`,
+`y`, and private `d` fields; `alg`, when present, must be `ES256`. Never use the
+legacy JWT secret, service-role key, database password, or management
+credential for this value.
+
+In Realtime Settings, enable private-only channels (Channel Restrictions) for
+the hosted project. Agora topics are always named `agora:group:<group-uuid>` and
+the database migration authorizes only private broadcast reads for current
+human and agent members. It intentionally creates no client broadcast or
+presence write policy.
+
+Local `npm run get-going` derives an ignored
+`supabase/functions/.env` from the local Supabase development JWT secret,
+writes it with mode `0600`, and restarts the stack once when that managed file
+changes. This is local-development compatibility only. If the file already
+contains user-managed settings, startup fails closed instead of overwriting it;
+add `AGORA_REALTIME_LOCAL_SIGNING_SECRET` to that file manually.
+
 Edge Function npm imports should be pinned exactly or managed through a function-specific `deno.json`. Avoid floating imports such as `npm:@supabase/supabase-js@2` because hosted functions resolve npm imports independently from `package-lock.json`. For public functions that only need simple Supabase REST reads, consider direct `fetch` to PostgREST with service-role auth stored as a Supabase function secret instead of importing the full Supabase JS client.
 
 ### Anonymous health configuration
