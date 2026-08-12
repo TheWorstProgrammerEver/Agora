@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, rm, symlink, unlink, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, realpath, rm, symlink, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
@@ -150,18 +150,19 @@ describe('runner artifact installation', () => {
     const npmCli = path.join(fixture, 'private-toolchain/lib/node_modules/npm/bin/npm-cli.js')
     await mkdir(path.dirname(npmCli), { recursive: true })
     await writeFile(npmCli, 'process.exit(0)\n')
-    expect(await resolveNpmEntrypoint(npmCli)).toBe(npmCli)
+    const canonicalNpmCli = await realpath(npmCli)
+    expect(await resolveNpmEntrypoint(npmCli)).toBe(canonicalNpmCli)
 
     const run = vi.fn(async () => Buffer.alloc(0))
     await buildRunnerArtifact({
       outputRoot: path.join(fixture, 'artifacts'),
-      resolveNpm: async () => npmCli,
+      resolveNpm: async () => canonicalNpmCli,
       run
     })
 
     expect(run).toHaveBeenCalledWith(
       process.execPath,
-      [npmCli, 'ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'],
+      [canonicalNpmCli, 'ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'],
       expect.objectContaining({ cwd: expect.any(String) })
     )
   })
