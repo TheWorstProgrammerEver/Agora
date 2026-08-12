@@ -354,6 +354,34 @@ describe('Agora agent runner orchestration', () => {
     expect(calls.count).toBe(1)
   })
 
+  it('does not consume handler attempts when credentials rotate before chunk fetch', async () => {
+    const backing = new FakeAgora([message(1, 'Please survive pre-plan rotation')])
+    let denied = true
+    const api = {
+      invoke: (identifier, params) => {
+        if (identifier === 'getGroupMessages' && denied) {
+          throw new AgoraApiError('authentication_denied', { status: 401 })
+        }
+        return backing.invoke(identifier, params)
+      }
+    }
+    const calls = { count: 0 }
+    const fixture = await createFixture({ api, handler: successfulHandler(calls) })
+
+    await expect(fixture.runner.runOnce(new AbortController().signal))
+      .rejects.toMatchObject({ code: 'authentication_denied' })
+    expect((await fixture.store.read()).groups[groupId]).toMatchObject({ cursor: '0' })
+    expect((await fixture.store.read()).groups[groupId].lease).toBeUndefined()
+    expect(calls.count).toBe(0)
+
+    denied = false
+    await fixture.runner.runOnce(new AbortController().signal)
+
+    expect(calls.count).toBe(1)
+    expect(backing.markCalls).toContain('1')
+    expect((await fixture.store.read()).groups[groupId].cursor).toBe('1')
+  })
+
   it('does not acknowledge or advance after bounded handler failures', async () => {
     const api = new FakeAgora([message(1, 'Handler should fail')])
     let calls = 0

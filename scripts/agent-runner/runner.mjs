@@ -29,6 +29,7 @@ import {
   prepareLease,
   reconcileGroups,
   recoverLease,
+  releaseUnplannedLease,
   renewLease
 } from './state-machine.mjs'
 
@@ -204,6 +205,15 @@ export class AgoraRunner {
     try {
       messages = await fetchExactChunk(this.api, groupId, lease, signal)
     } catch (error) {
+      if (error instanceof AgoraApiError) {
+        await this.store.update((state) => releaseUnplannedLease(
+          state,
+          groupId,
+          lease.chunkId,
+          this.runId
+        ))
+        throw error
+      }
       const failure = await this.#markFailure(groupId, lease, 'range_unavailable')
       if (error instanceof RunnerCanceledError) throw error
       if (failure?.phase === 'retryable') {
@@ -228,6 +238,15 @@ export class AgoraRunner {
         })
         return
       } catch (error) {
+        if (error instanceof AgoraApiError) {
+          await this.store.update((state) => releaseUnplannedLease(
+            state,
+            groupId,
+            lease.chunkId,
+            this.runId
+          ))
+          throw error
+        }
         await this.#markFailure(groupId, lease, 'range_unavailable')
         throw error
       }

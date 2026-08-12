@@ -1,5 +1,7 @@
+import { platform } from 'node:os'
 import {
   processGroupMembersMatch,
+  readLinuxBootId,
   readProcessGroupMembers,
   readProcessIdentity,
   stableProcessIdentityMatches
@@ -78,17 +80,27 @@ export const terminateCurrentHandlerGroup = async (processGroupId, options = {})
 
 export const settleRecoveredHandler = async (identity, options = {}) => {
   if (!identity) return
-  const current = readProcessIdentity(identity.pid)
+  const currentPlatform = (options.platform ?? platform)()
+  if (identity.platform !== currentPlatform) return
+  if (identity.platform === 'linux'
+    && identity.bootId !== (options.readBootId ?? readLinuxBootId)()) {
+    return
+  }
+
+  const readIdentity = options.readIdentity ?? readProcessIdentity
+  const readGroupMembers = options.readGroupMembers ?? readProcessGroupMembers
+  const terminateGroup = options.terminateGroup ?? terminateCurrentHandlerGroup
+  const current = readIdentity(identity.pid)
 
   if (!current) {
-    if (readProcessGroupMembers(identity.processGroupId).length > 0) {
+    if (readGroupMembers(identity.processGroupId).length > 0) {
       throw new Error('Agora recovered handler ownership is indeterminate.')
     }
     return
   }
 
   if (!executingIdentity(current)) {
-    if (readProcessGroupMembers(identity.processGroupId).length > 0) {
+    if (readGroupMembers(identity.processGroupId).length > 0) {
       throw new Error('Agora recovered handler ownership is indeterminate.')
     }
     return
@@ -98,5 +110,5 @@ export const settleRecoveredHandler = async (identity, options = {}) => {
     throw new Error('Agora recovered handler identity changed.')
   }
 
-  await terminateCurrentHandlerGroup(identity.processGroupId, options)
+  await terminateGroup(identity.processGroupId, options)
 }

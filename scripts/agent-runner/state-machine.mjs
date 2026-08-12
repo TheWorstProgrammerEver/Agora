@@ -170,6 +170,17 @@ export const renewLease = (state, groupId, chunkId, ownerRunId, expiresAt) => {
   lease.expiresAt = expiresAt
 }
 
+export const releaseUnplannedLease = (state, groupId, chunkId, ownerRunId) => {
+  const group = state.groups[groupId]
+  const lease = requireOwnedLease(state, groupId, chunkId, ownerRunId)
+
+  if (lease.phase !== 'leased') {
+    throw new Error('Only an unplanned Agora lease can be released.')
+  }
+
+  delete group.lease
+}
+
 export const attachPlan = (state, groupId, chunkId, ownerRunId, plan) => {
   const lease = requireOwnedLease(state, groupId, chunkId, ownerRunId)
 

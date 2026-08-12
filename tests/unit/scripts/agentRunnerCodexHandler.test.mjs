@@ -1,11 +1,21 @@
 import { randomUUID } from 'node:crypto'
-import { chmod, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  symlink,
+  writeFile
+} from 'node:fs/promises'
+import { arch, tmpdir, platform } from 'node:os'
+import { join, sep } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { RunnerCanceledError } from '../../../scripts/agent-runner/abort.mjs'
 import {
   buildCodexArgs,
+  handlerPermissionConfig,
   runCodexHandler
 } from '../../../scripts/agent-runner/codex-handler.mjs'
 import { isProcessExecuting, readProcessIdentity } from '../../../scripts/process-identity.mjs'
@@ -23,6 +33,16 @@ const profile = { model: 'gpt-5.6-luna', reasoningEffort: 'medium' }
 const contextAccess = {
   capability: 'c'.repeat(43),
   url: 'http://127.0.0.1:43210/context'
+}
+const packageTargets = {
+  darwin: {
+    arm64: ['codex-darwin-arm64', 'aarch64-apple-darwin'],
+    x64: ['codex-darwin-x64', 'x86_64-apple-darwin']
+  },
+  linux: {
+    arm64: ['codex-linux-arm64', 'aarch64-unknown-linux-musl'],
+    x64: ['codex-linux-x64', 'x86_64-unknown-linux-musl']
+  }
 }
 
 const fixtureConfig = (root, executable) => ({
@@ -43,6 +63,46 @@ const createExecutable = async (source) => {
   await writeFile(executable, `#!/usr/bin/env node\n${source}`, { mode: 0o700 })
   await chmod(executable, 0o700)
   return { executable, root }
+}
+
+const createGlobalCodexLayout = async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agora-global-codex-test-'))
+  roots.push(root)
+  const [platformPackage, targetTriple] = packageTargets[platform()][arch()]
+  const moduleRoot = join(root, 'lib/node_modules/@openai')
+  const packageRoot = join(moduleRoot, 'codex')
+  const platformRoot = join(moduleRoot, platformPackage)
+  const launcher = join(packageRoot, 'bin/codex.js')
+  const runtimeDirectory = join(platformRoot, 'vendor', targetTriple, 'bin')
+  const runtime = join(runtimeDirectory, 'codex')
+  const publicDirectory = join(root, 'bin')
+  const publicLauncher = join(publicDirectory, 'codex')
+  await Promise.all([
+    mkdir(join(packageRoot, 'bin'), { recursive: true }),
+    mkdir(runtimeDirectory, { recursive: true }),
+    mkdir(publicDirectory, { recursive: true })
+  ])
+  await Promise.all([
+    writeFile(launcher, '#!/usr/bin/env node\n', { mode: 0o700 }),
+    writeFile(join(packageRoot, 'package.json'), JSON.stringify({
+      bin: { codex: 'bin/codex.js' },
+      name: '@openai/codex',
+      version: '0.147.0'
+    })),
+    writeFile(join(platformRoot, 'package.json'), JSON.stringify({
+      cpu: [arch()],
+      name: '@openai/codex',
+      os: [platform()],
+      version: `0.147.0-${platform()}-${arch()}`
+    })),
+    writeFile(runtime, '#!/bin/sh\nexit 0\n', { mode: 0o700 })
+  ])
+  await Promise.all([
+    chmod(launcher, 0o700),
+    chmod(runtime, 0o700),
+    symlink('../lib/node_modules/@openai/codex/bin/codex.js', publicLauncher)
+  ])
+  return { packageRoot, platformRoot, publicLauncher, runtimeDirectory }
 }
 
 afterEach(async () => {
@@ -205,5 +265,20 @@ describe('Codex chunk handler adapter', () => {
     ]))
     expect(args).not.toContain('--sandbox')
     expect(args.at(-1)).toBe('-')
+  })
+
+  it('grants a global npm launcher only its exact native runtime directory', async () => {
+    const layout = await createGlobalCodexLayout()
+    const config = fixtureConfig(layout.packageRoot, layout.publicLauncher)
+    const filesystem = handlerPermissionConfig(config).find((entry) => (
+      entry.startsWith('permissions.agora-handler.filesystem=')
+    ))
+
+    expect(filesystem).toContain(
+      `${JSON.stringify(`${layout.runtimeDirectory}${sep}`)} = "read"`
+    )
+    expect(filesystem).not.toContain(
+      `${JSON.stringify(`${layout.platformRoot}${sep}`)} = "read"`
+    )
   })
 })

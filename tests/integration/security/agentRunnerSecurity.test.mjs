@@ -9,6 +9,7 @@ import { agoraRequestIdentifiers } from '../../../common/agoraRequestIdentifiers
 import { createAgoraApiClient } from '../../../scripts/agent-runner/api-client.mjs'
 import { loadRunnerConfig } from '../../../scripts/agent-runner/config.mjs'
 import { handlerPermissionConfig } from '../../../scripts/agent-runner/codex-handler.mjs'
+import { resolveCodexRuntime } from '../../../scripts/agent-runner/codex-runtime.mjs'
 import { readAgentCredential } from '../../../scripts/agent-runner/credential.mjs'
 import { createAgoraRunner } from '../../../scripts/agent-runner/runner.mjs'
 import {
@@ -200,13 +201,19 @@ describe('agent runner against local Supabase', () => {
       })
       expect(sent.status).toBe(200)
       const runtime = await createRuntime(agent.applicationKey, {
+        AGORA_RUNNER_CODEX_BIN: process.env.AGORA_RUNNER_TEST_CODEX_BIN ?? 'codex',
         AGORA_RUNNER_HANDLER_PROMPT: join(
           process.cwd(),
           'tests/fixtures/agentRunnerContextHandlerPrompt.md'
         ),
         AGORA_RUNNER_HANDLER_TIMEOUT_MS: '600000'
       })
-      execFileSync('codex', [
+      const codexRuntime = resolveCodexRuntime(runtime.config.codexBin)
+      if (process.env.AGORA_RUNNER_REQUIRE_NPM_CODEX === 'true') {
+        expect(codexRuntime.executable).toMatch(/[\\/]codex\.js$/)
+        expect(codexRuntime.readableDirectories).toHaveLength(2)
+      }
+      execFileSync(codexRuntime.executable, [
         'sandbox',
         ...handlerPermissionConfig(runtime.config).flatMap((value) => ['-c', value]),
         '--permission-profile', 'agora-handler',

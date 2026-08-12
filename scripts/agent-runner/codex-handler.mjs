@@ -1,10 +1,10 @@
 import { spawn } from 'node:child_process'
-import { constants, realpathSync, statSync } from 'node:fs'
+import { constants } from 'node:fs'
 import { open } from 'node:fs/promises'
-import { delimiter, dirname, isAbsolute, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { validateHandlerPlan } from './api-validation.mjs'
 import { RunnerCanceledError, throwIfAborted } from './abort.mjs'
+import { resolveCodexRuntime } from './codex-runtime.mjs'
 import {
   durableProcessIdentity,
   terminateCurrentHandlerGroup
@@ -32,22 +32,6 @@ const allowedEnvironmentKeys = new Set([
   'XDG_CONFIG_HOME'
 ])
 
-const resolveExecutable = (executable) => {
-  const candidates = isAbsolute(executable)
-    ? [executable]
-    : (process.env.PATH ?? '').split(delimiter).filter(Boolean).map((entry) => join(entry, executable))
-  for (const candidate of candidates) {
-    try {
-      const resolved = realpathSync(candidate)
-      const stat = statSync(resolved)
-      if (stat.isFile() && (stat.mode & 0o111) !== 0) return resolved
-    } catch {
-      // Continue through the bounded PATH candidates.
-    }
-  }
-  throw new HandlerExecutionError('handler_failed')
-}
-
 export class HandlerExecutionError extends Error {
   constructor(code) {
     super(`Agora handler failed (${code}).`)
@@ -55,12 +39,21 @@ export class HandlerExecutionError extends Error {
   }
 }
 
+const handlerRuntime = (codexBin) => {
+  try {
+    return resolveCodexRuntime(codexBin)
+  } catch {
+    throw new HandlerExecutionError('handler_failed')
+  }
+}
+
 const filesystemPermissionConfig = (config) => {
+  const runtime = config.codexRuntime ?? handlerRuntime(config.codexBin)
   const entries = new Map([
     [':root', 'deny'],
     [':minimal', 'read'],
     [apiCliDirectory, 'read'],
-    [`${dirname(resolveExecutable(config.codexBin))}/`, 'read'],
+    ...runtime.readableDirectories.map((path) => [path, 'read']),
     [config.credentialDirectory, 'deny']
   ])
   const fields = Array.from(entries, ([path, access]) => (
@@ -171,9 +164,13 @@ export const runCodexHandler = async ({
     0o600
   )
   await outputHandle.close()
-  const executable = resolveExecutable(config.codexBin)
-  const resolvedConfig = { ...config, codexBin: executable }
-  const child = spawn(executable, buildCodexArgs({
+  const codexRuntime = handlerRuntime(config.codexBin)
+  const resolvedConfig = {
+    ...config,
+    codexBin: codexRuntime.executable,
+    codexRuntime
+  }
+  const child = spawn(codexRuntime.executable, buildCodexArgs({
     config: resolvedConfig,
     outputPath,
     profile
