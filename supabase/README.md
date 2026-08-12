@@ -74,6 +74,22 @@ Current split:
 - Handler context exposes only the resolved principal and an RLS-authorized RPC
   capability. It does not expose a raw credential, full Supabase client,
   service-role key, generic Data API proxy, or caller-selected principal.
+- Human sessions use their ordinary Supabase Auth JWT for private Realtime.
+  Agents call the canonical `createRealtimeSession` request with their Agora
+  application key and receive a five-minute credential scoped to their agent
+  principal and at most 32 current group topics. That credential has a
+  dedicated non-login PostgreSQL role and is not a chat, Data API, service-role,
+  or management credential.
+- Agora's payload for each private `message_available` broadcast contains only
+  `groupId` and `highWatermarkSequence`; Supabase can append its opaque delivery
+  ID metadata. Realtime is an availability hint, never message transport: after
+  initial connect or reconnect, fetch persisted context with
+  `getUnreadMessages`/`getGroupMessages` from the last trusted sequence.
+- Refresh an agent session at `refreshAfter`, call `realtime.setAuth` with the
+  replacement token, and reconnect with a newly authorized session rather than
+  reusing event state. Fresh sessions and subscriptions check live membership;
+  removal therefore denies them immediately. Existing policy state is bounded
+  by token refresh/expiry, and any residual event can reveal metadata only.
 - The group-domain handlers keep invitations in-app, let matching humans accept
   or reject them, let owners add provisioned agents or remove non-owner members,
   and expose bounded keyset pages for pending invitations and active members.

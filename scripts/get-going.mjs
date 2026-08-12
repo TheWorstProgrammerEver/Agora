@@ -10,6 +10,7 @@ import {
   startManagedProcess,
   stopManagedProcesses
 } from './managed-processes.mjs'
+import { ensureLocalRealtimeSigningEnvironment } from './realtime-local-signing.mjs'
 
 const appPort = 5173
 const supabasePort = 54321
@@ -438,6 +439,12 @@ const main = async () => {
     await ensureDocker()
     if (requestedExitCode !== undefined) return
     await startSupabase()
+    if (requestedExitCode !== undefined) return
+    if (await ensureLocalRealtimeSigningEnvironment(run)) {
+      console.log('Restarting Supabase with local Realtime signing configuration...')
+      await run('npm', ['run', 'supabase:stop'])
+      await startSupabase()
+    }
     if (requestedExitCode !== undefined) return
     await disableSupabaseContainerRestarts()
     if (requestedExitCode !== undefined) return

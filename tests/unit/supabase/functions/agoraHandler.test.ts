@@ -5,6 +5,7 @@ import { MissingAuthenticationError } from '../../../../supabase/functions/agora
 import { createAgoraHandler } from '../../../../supabase/functions/agora/handler'
 import { AgoraGroupRequestError } from '../../../../supabase/functions/agora/handlers/groups/error'
 import { AgoraMessageRequestError } from '../../../../supabase/functions/agora/handlers/messages/error'
+import { AgoraRealtimeRequestError } from '../../../../supabase/functions/agora/handlers/realtime/error'
 
 const context = {
   database: { rpc: async () => ({ data: null, error: null }) },
@@ -134,6 +135,27 @@ describe('Agora HTTP handler', () => {
     expect(response.status).toBe(409)
     await expect(response.json()).resolves.toEqual({
       error: 'This client message identifier is already in use.'
+    })
+  })
+
+  it('projects bounded Realtime authorization failures', async () => {
+    const handler = createAgoraHandler({
+      authenticate: vi.fn().mockResolvedValue(context),
+      createDispatcher: () => ({
+        dispatch: vi.fn().mockRejectedValue(
+          new AgoraRealtimeRequestError('This Realtime session is not permitted.', 403)
+        )
+      }),
+      parseRequest: vi.fn().mockResolvedValue({
+        identifier: agoraRequestIdentifiers.createRealtimeSession,
+        params: { groupIds: [randomUUID()] }
+      })
+    })
+    const response = await handler(request())
+
+    expect(response.status).toBe(403)
+    await expect(response.json()).resolves.toEqual({
+      error: 'This Realtime session is not permitted.'
     })
   })
 })
