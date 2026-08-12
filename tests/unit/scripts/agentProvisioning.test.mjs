@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, readFile, rm, symlink, unlink, writeFile } from 'node:f
 import { tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   artifactDigest,
   buildManifest,
@@ -11,8 +11,15 @@ import {
 import {
   expectedLauncherContent,
   installRunnerArtifact,
-  parseRunnerEnvironment
+  parseRunnerEnvironment,
+  runnerReleaseRoot
 } from '../../../scripts/agent-provisioning/artifact-installer.mjs'
+import {
+  buildRunnerArtifact,
+  resolveNpmEntrypoint
+} from '../../../scripts/agent-provisioning/build-artifact.mjs'
+import { runHostCommand } from '../../../scripts/agent-provisioning/host-cli.mjs'
+import { writeProvisioningFailure } from '../../../scripts/agent-provisioning/failure.mjs'
 import {
   createReadinessReceipt,
   parseReadinessReceipt
@@ -56,6 +63,109 @@ const configContent = [
 ].join('\n') + '\n'
 
 describe('runner artifact installation', () => {
+  it.each([
+    '../outside',
+    '/etc',
+    'a/../b',
+    'A'.repeat(64),
+    'a'.repeat(63),
+    'a'.repeat(65)
+  ])('rejects unsafe release digest %j before deriving a cleanup path', async (digest) => {
+    const fixture = await createFixture()
+    const outside = path.join(fixture, 'outside')
+    const roots = {
+      config: path.join(fixture, 'etc/agora-agent-runner'),
+      custodyLauncher: path.join(fixture, 'usr/local/sbin/agora-agent-custody'),
+      launcher: path.join(fixture, 'usr/local/bin/agora-agent-runner'),
+      releases: path.join(fixture, 'opt/agora/releases'),
+      systemd: path.join(fixture, 'etc/systemd/system')
+    }
+    await mkdir(outside)
+    await writeFile(path.join(outside, 'sentinel'), 'unchanged')
+    const run = vi.fn()
+
+    await expect(runHostCommand([
+      'cleanup', '--digest', digest, '--service', 'agora-agent-runner@test.service'
+    ], { getUid: () => 0, roots, run })).rejects.toThrow('digest is malformed')
+    expect(run).not.toHaveBeenCalled()
+    expect(await readFile(path.join(outside, 'sentinel'), 'utf8')).toBe('unchanged')
+  })
+
+  it('derives a release as exactly one owned child', () => {
+    const releases = '/opt/agora/releases'
+    const digest = 'a'.repeat(64)
+    expect(runnerReleaseRoot(releases, digest)).toBe(path.join(releases, digest))
+  })
+
+  it('reports a retryable artifact reload transition after publication', async () => {
+    const digest = 'a'.repeat(64)
+    const service = 'agora-agent-runner@test.service'
+    const install = vi.fn(async () => ({ user: 'test' }))
+    const verifyInstalled = vi.fn(async () => {})
+    const run = vi.fn()
+      .mockRejectedValueOnce(new Error('native reload marker'))
+      .mockResolvedValueOnce(Buffer.alloc(0))
+    const recovery = `npm run agent-provision:host -- reload-artifact --digest ${digest} --service ${service}`
+
+    const failure = await runHostCommand([
+      'install-artifact', '--artifact', '/artifact', '--config', '/config', '--digest', digest,
+      '--service', service
+    ], { getUid: () => 0, install, run }).catch((error) => error)
+    expect(failure).toMatchObject({
+      code: 'daemon_reload_failed',
+      recovery,
+      stage: 'artifact_reload'
+    })
+    const failureOutput = []
+    writeProvisioningFailure(failure, {
+      code: 'host_command_failed',
+      recovery: 'npm run agent-provision:host -- --help',
+      stage: 'host'
+    }, (value) => failureOutput.push(value))
+    expect(JSON.parse(failureOutput.join(''))).toEqual({
+      code: 'daemon_reload_failed',
+      event: 'provisioning_failed',
+      recovery,
+      stage: 'artifact_reload'
+    })
+    expect(failureOutput.join('')).not.toContain('native reload marker')
+
+    const output = []
+    await expect(runHostCommand([
+      'reload-artifact', '--digest', digest, '--service', service
+    ], {
+      getUid: () => 0,
+      run,
+      verifyInstalled,
+      write: (value) => output.push(value)
+    })).resolves.toBeUndefined()
+    expect(install).toHaveBeenCalledTimes(1)
+    expect(verifyInstalled).toHaveBeenCalledTimes(1)
+    expect(run).toHaveBeenCalledTimes(2)
+    expect(output.join('')).toContain('artifact_reload_complete')
+  })
+
+  it('invokes npm through the active Node runtime when npm is outside child PATH', async () => {
+    const fixture = await createFixture()
+    const npmCli = path.join(fixture, 'private-toolchain/lib/node_modules/npm/bin/npm-cli.js')
+    await mkdir(path.dirname(npmCli), { recursive: true })
+    await writeFile(npmCli, 'process.exit(0)\n')
+    expect(await resolveNpmEntrypoint(npmCli)).toBe(npmCli)
+
+    const run = vi.fn(async () => Buffer.alloc(0))
+    await buildRunnerArtifact({
+      outputRoot: path.join(fixture, 'artifacts'),
+      resolveNpm: async () => npmCli,
+      run
+    })
+
+    expect(run).toHaveBeenCalledWith(
+      process.execPath,
+      [npmCli, 'ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'],
+      expect.objectContaining({ cwd: expect.any(String) })
+    )
+  })
+
   it('rejects a symlink used as the artifact source argument', async () => {
     const fixture = await createFixture()
     const artifact = path.join(fixture, 'artifact')
@@ -108,6 +218,12 @@ describe('runner artifact installation', () => {
 
     expect(await readFile(roots.launcher, 'utf8')).toBe(expectedLauncherContent(installed.releaseRoot))
     expect(await readFile(path.join(roots.config, 'test.conf'), 'utf8')).toBe(configContent)
+
+    const run = vi.fn(async () => Buffer.alloc(0))
+    await runHostCommand([
+      'reload-artifact', '--digest', digest, '--service', 'agora-agent-runner@test.service'
+    ], { getUid: () => 0, roots, run, write: () => {} })
+    expect(run).toHaveBeenCalledExactlyOnceWith('/usr/bin/systemctl', ['daemon-reload'])
   })
 
   it('rejects a symlink occupying the final launcher path without replacing it', async () => {

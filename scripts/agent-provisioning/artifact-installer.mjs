@@ -126,6 +126,21 @@ const pathExists = async (target) => {
   }
 }
 
+export const requireArtifactDigest = (digest) => {
+  if (!digestPattern.test(digest)) throw new Error('Runner artifact digest is malformed.')
+  return digest
+}
+
+export const runnerReleaseRoot = (releasesRoot, digest) => {
+  requireArtifactDigest(digest)
+  const canonicalReleasesRoot = path.resolve(releasesRoot)
+  const releaseRoot = path.resolve(canonicalReleasesRoot, digest)
+  if (path.dirname(releaseRoot) !== canonicalReleasesRoot || path.basename(releaseRoot) !== digest) {
+    throw new Error('Runner artifact release path is outside the owned namespace.')
+  }
+  return releaseRoot
+}
+
 export const installRunnerArtifact = async ({
   artifact,
   config,
@@ -141,7 +156,6 @@ export const installRunnerArtifact = async ({
   },
   service
 }) => {
-  if (!digestPattern.test(digest)) throw new Error('Runner artifact digest is malformed.')
   const user = requireService(service)
   const artifactInput = path.resolve(artifact)
   const sourceRoot = await realpath(artifactInput)
@@ -157,7 +171,7 @@ export const installRunnerArtifact = async ({
   const configSource = await realpath(configInput)
   await requireRegular(configSource, 'Runner public configuration', { privateFile: true })
   const publicConfig = parseEnvironment(await readFile(configSource, 'utf8'))
-  const releaseRoot = path.join(roots.releases, digest)
+  const releaseRoot = runnerReleaseRoot(roots.releases, digest)
   const temporaryRelease = path.join(roots.releases, `.${digest}.installing`)
   const installedUnit = path.join(roots.systemd, 'agora-agent-runner@.service')
   const installedConfig = path.join(roots.config, `${user}.conf`)

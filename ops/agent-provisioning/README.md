@@ -59,6 +59,18 @@ account, installs the exact unit, and creates regular root-owned final launchers
 at `/usr/local/bin/agora-agent-runner` and
 `/usr/local/sbin/agora-agent-custody`. Existing destinations, symlinks, manifest
 drift, or mutable-checkout launcher targets are rejected rather than replaced.
+If publication succeeds but systemd cannot reload, the command reports
+`artifact_reload` / `daemon_reload_failed` and prints the exact non-secret
+reconciliation command. That command revalidates the installed digest,
+launchers, unit, and public configuration before retrying only the reload:
+
+```sh
+npm run agent-provision:host -- reload-artifact \
+  --digest ARTIFACT_DIGEST \
+  --service agora-agent-runner@my-user.service
+```
+
+Do not repeat `install-artifact` over the published destinations.
 
 ## 3. Run readiness before key issuance
 

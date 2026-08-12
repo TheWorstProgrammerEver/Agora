@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { cp, lstat, mkdir, mkdtemp, rename, rm, writeFile } from 'node:fs/promises'
+import { cp, lstat, mkdir, mkdtemp, realpath, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { pathToFileURL } from 'node:url'
@@ -44,8 +44,21 @@ const pathExists = async (target) => {
   }
 }
 
+export const resolveNpmEntrypoint = async (npmExecPath = process.env.npm_execpath) => {
+  if (!npmExecPath || !path.isAbsolute(npmExecPath) || path.basename(npmExecPath) !== 'npm-cli.js') {
+    throw new Error('The active npm entrypoint is unavailable or invalid.')
+  }
+  const npmEntrypoint = await realpath(npmExecPath)
+  const metadata = await lstat(npmEntrypoint)
+  if (!metadata.isFile() || path.basename(npmEntrypoint) !== 'npm-cli.js') {
+    throw new Error('The active npm entrypoint is unavailable or invalid.')
+  }
+  return npmEntrypoint
+}
+
 export const buildRunnerArtifact = async ({
   outputRoot = defaultOutputRoot,
+  resolveNpm = resolveNpmEntrypoint,
   run = runCommand
 } = {}) => {
   await mkdir(outputRoot, { recursive: true })
@@ -65,7 +78,8 @@ export const buildRunnerArtifact = async ({
     await cp(path.join(runtimePackageRoot, 'package-lock.json'), path.join(staging, 'package-lock.json'))
     await mkdir(path.join(staging, 'runtime'))
     await cp(process.execPath, path.join(staging, 'runtime/node'))
-    await run('npm', ['ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'], {
+    const npmEntrypoint = await resolveNpm()
+    await run(process.execPath, [npmEntrypoint, 'ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'], {
       cwd: staging
     })
 
