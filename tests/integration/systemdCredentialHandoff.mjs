@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from 'node:crypto'
 import { constants as fsConstants } from 'node:fs'
-import { chmod, mkdtemp, open, readFile, readdir, rename, rm } from 'node:fs/promises'
+import { chmod, mkdtemp, open, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { runCommand } from '../../scripts/agent-keys/command.mjs'
@@ -67,19 +67,21 @@ const probeActiveCredential = async () => {
 
   observedFingerprints.push(fingerprint)
 
-  const bindingUnit = `${unit}-binding.service`
+  const bindingUnit = `agora-agent-runner@test-${randomBytes(4).toString('hex')}.service`
   const credentialFile = path.join(directory, 'agora-agent-key.cred')
+  const bindingUnitPath = path.join('/run/systemd/system', bindingUnit)
 
   try {
-    await checkedRun('/usr/bin/systemd-run', [
-      '--no-block',
-      '--quiet',
-      `--unit=${bindingUnit}`,
-      '--property=Type=simple',
-      `--property=LoadCredentialEncrypted=agora-agent-key:${credentialFile}`,
-      '/bin/sleep',
-      '30'
-    ])
+    await writeFile(bindingUnitPath, [
+      '[Unit]',
+      'Description=Disposable Agora credential binding probe',
+      '[Service]',
+      'Type=simple',
+      `LoadCredentialEncrypted=agora-agent-key:${credentialFile}`,
+      'ExecStart=/bin/sleep 30',
+      ''
+    ].join('\n'), { flag: 'wx', mode: 0o644 })
+    await checkedRun('/usr/bin/systemctl', ['daemon-reload'])
     const service = createSystemdServiceControl({
       expectedCredentialPath: credentialFile,
       run: checkedRun,
@@ -90,6 +92,8 @@ const probeActiveCredential = async () => {
   } finally {
     await runCommand('/usr/bin/systemctl', ['stop', bindingUnit]).catch(() => {})
     await runCommand('/usr/bin/systemctl', ['reset-failed', bindingUnit]).catch(() => {})
+    await rm(bindingUnitPath, { force: true })
+    await runCommand('/usr/bin/systemctl', ['daemon-reload']).catch(() => {})
   }
 }
 

@@ -63,10 +63,11 @@ export const createOperatorClient = () => {
   })
 
   return {
-    beginRotation: async (principalId) => requireIssuance(
+    beginRotation: async (principalId, readinessCapabilityId) => requireIssuance(
       requireSuccessfulRpc(
         await client.rpc('begin_agent_application_key_rotation', {
-          agent_principal_id_to_rotate: principalId
+          agent_principal_id_to_rotate: principalId,
+          host_readiness_capability_id: readinessCapabilityId
         }),
         'Agent key rotation'
       ),
@@ -86,14 +87,43 @@ export const createOperatorClient = () => {
       }),
       'Agent deactivation'
     ),
-    provisionAgent: async (displayName) => requireIssuance(
+    getProvisioningReadiness: async (principalId) => requireSuccessfulRpc(
+      await client.rpc('get_agent_provisioning_readiness', {
+        agent_principal_id_to_check: principalId
+      }),
+      'Agent provisioning readiness'
+    ),
+    issueInitialKey: async (principalId, readinessCapabilityId) => requireIssuance(
       requireSuccessfulRpc(
-        await client.rpc('provision_agent_principal', {
-          display_name_to_use: displayName
+        await client.rpc('issue_initial_agent_application_key', {
+          agent_principal_id_to_issue: principalId,
+          host_readiness_capability_id: readinessCapabilityId
         }),
-        'Agent provisioning'
+        'Initial agent key issuance'
       ),
-      'Agent provisioning'
+      'Initial agent key issuance'
+    ),
+    prepareAgent: async (displayName) => requireSuccessfulRpc(
+      await client.rpc('prepare_agent_principal', {
+        display_name_to_use: displayName
+      }),
+      'Agent preparation'
+    ),
+    recordProvisioningReadiness: async ({
+      agentPrincipalId,
+      artifactDigest,
+      checkedAt,
+      operation,
+      service
+    }) => requireSuccessfulRpc(
+      await client.rpc('record_agent_host_readiness', {
+        agent_principal_id_to_check: agentPrincipalId,
+        artifact_digest_to_check: artifactDigest,
+        host_checked_at: checkedAt,
+        operation_to_check: operation,
+        service_name_to_check: service
+      }),
+      'Agent host readiness registration'
     ),
     revokeKey: async (keyId, reason) => requireSuccessfulRpc(
       await client.rpc('revoke_agent_application_key', {

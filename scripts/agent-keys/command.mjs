@@ -3,12 +3,18 @@ import { spawn } from 'node:child_process'
 const childEnvironment = {
   LANG: 'C',
   LC_ALL: 'C',
-  PATH: '/usr/bin:/bin'
+  PATH: '/usr/local/bin:/usr/bin:/bin'
 }
 
-export const runCommand = (file, args, { input, output = 'ignore' } = {}) => new Promise((resolve, reject) => {
+export const runCommand = (file, args, {
+  cwd,
+  environment = childEnvironment,
+  input,
+  output = 'ignore'
+} = {}) => new Promise((resolve, reject) => {
   const child = spawn(file, args, {
-    env: childEnvironment,
+    cwd,
+    env: environment,
     stdio: ['pipe', output === 'buffer' ? 'pipe' : 'ignore', 'pipe']
   })
   const stdout = []
