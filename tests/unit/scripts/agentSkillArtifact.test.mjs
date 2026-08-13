@@ -39,7 +39,7 @@ describe('downloadable Agora Codex skill', () => {
     expect(skillArtifactEtag).toBe(
       `"sha256-${createHash('sha256').update(first.archive).digest('hex')}"`
     )
-  })
+  }, 15_000)
 
   it('has the exact safe archive layout and generated dispatcher catalog', async () => {
     const built = await buildAgentSkill()

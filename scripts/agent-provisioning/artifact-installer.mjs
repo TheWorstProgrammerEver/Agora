@@ -192,12 +192,14 @@ export const installRunnerArtifact = async ({
     await mkdir(path.dirname(roots.launcher), { mode: 0o755, recursive: true })
     await writeFile(roots.launcher, launcherContent(releaseRoot), { flag: 'wx', mode: 0o755 })
     await chown(roots.launcher, ownerUid, ownerGid)
+    await chmod(roots.launcher, 0o755)
     await mkdir(path.dirname(roots.custodyLauncher), { mode: 0o755, recursive: true })
     await writeFile(roots.custodyLauncher, custodyLauncherContent(releaseRoot), {
       flag: 'wx',
       mode: 0o755
     })
     await chown(roots.custodyLauncher, ownerUid, ownerGid)
+    await chmod(roots.custodyLauncher, 0o755)
 
     await mkdir(roots.systemd, { mode: 0o755, recursive: true })
     await cp(path.join(releaseRoot, 'ops/systemd/agora-agent-runner@.service'), installedUnit, {

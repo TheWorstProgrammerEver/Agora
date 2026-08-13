@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, realpath, rm, symlink, unlink, writeFile } from 'node:fs/promises'
+import { chmod, mkdtemp, mkdir, readFile, realpath, rm, symlink, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
@@ -42,16 +42,21 @@ const createArtifact = async (root) => {
   await mkdir(path.join(root, 'ops/systemd'), { recursive: true })
   await mkdir(path.join(root, 'runtime'), { recursive: true })
   await mkdir(path.join(root, 'scripts/agent-runner'), { recursive: true })
+  const servicePath = path.join(root, 'ops/systemd/agora-agent-runner@.service')
+  const cliPath = path.join(root, 'scripts/agent-runner/cli.mjs')
+  const runtimePath = path.join(root, 'runtime/node')
   await writeFile(
-    path.join(root, 'ops/systemd/agora-agent-runner@.service'),
-    '[Service]\nExecStart=/usr/local/bin/agora-agent-runner run\n'
+    servicePath,
+    '[Service]\nExecStart=/usr/local/bin/agora-agent-runner run\n',
+    { mode: 0o644 }
   )
-  await writeFile(path.join(root, 'scripts/agent-runner/cli.mjs'), 'process.exit(0)\n', {
-    mode: 0o755
-  })
-  await writeFile(path.join(root, 'runtime/node'), 'fixture runtime\n', { mode: 0o755 })
+  await writeFile(cliPath, 'process.exit(0)\n', { mode: 0o755 })
+  await writeFile(runtimePath, 'fixture runtime\n', { mode: 0o755 })
+  await chmod(servicePath, 0o644)
+  await chmod(cliPath, 0o755)
+  await chmod(runtimePath, 0o755)
   const manifestBytes = Buffer.from(serializeManifest(await buildManifest(root)))
-  await writeFile(path.join(root, 'agora-runner-manifest.json'), manifestBytes)
+  await writeFile(path.join(root, 'agora-runner-manifest.json'), manifestBytes, { mode: 0o644 })
   return artifactDigest(manifestBytes)
 }
 
